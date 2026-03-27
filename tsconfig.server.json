@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist/server",
+    "rootDir": ".",
+    "types": ["node"],
+    "noEmit": false,
+    "sourceMap": true
+  },
+  "include": ["server/**/*.ts", "lib/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src", "scripts"]
+}
