@@ -15,5 +15,5 @@
     "scripts/**/*.ts",
     "vite.config.ts"
   ],
-  "exclude": ["node_modules", "dist", ".next"]
+  "exclude": ["node_modules", "dist"]
 }
