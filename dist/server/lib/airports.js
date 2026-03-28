@@ -153,16 +153,6 @@ exports.AIRPORTS = [
         longitude: -122.3144,
     },
     {
-        slug: "seoul",
-        city: "Seoul",
-        airportName: "Seoul Incheon International Airport",
-        stationIcao: "RKSI",
-        countryCode: "KR",
-        timezone: "Asia/Seoul",
-        latitude: 37.469,
-        longitude: 126.451,
-    },
-    {
         slug: "shanghai",
         city: "Shanghai",
         airportName: "Shanghai Pudong International Airport",
@@ -221,16 +211,6 @@ exports.AIRPORTS = [
         timezone: "Europe/Warsaw",
         latitude: 52.163,
         longitude: 20.961,
-    },
-    {
-        slug: "wellington",
-        city: "Wellington",
-        airportName: "Wellington International Airport",
-        stationIcao: "NZWN",
-        countryCode: "NZ",
-        timezone: "Pacific/Auckland",
-        latitude: -41.331,
-        longitude: 174.806,
     },
 ];
 //# sourceMappingURL=airports.js.map

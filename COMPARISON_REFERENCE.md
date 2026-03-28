@@ -298,9 +298,7 @@ Per-city earliest resolved day:
 | Miami | `miami` | `2026-02-03` |
 | NYC | `nyc` | `2026-02-03` |
 | Seattle | `seattle` | `2026-02-03` |
-| Seoul | `seoul` | `2026-02-03` |
 | Toronto | `toronto` | `2026-02-03` |
-| Wellington | `wellington` | `2026-02-03` |
 | Paris | `paris` | `2026-02-11` |
 | Sao Paulo | `sao-paulo` | `2026-02-11` |
 | Lucknow | `lucknow` | `2026-03-05` |
