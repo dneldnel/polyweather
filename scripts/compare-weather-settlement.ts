@@ -5,8 +5,8 @@ import {
   runComparisonSync,
   shiftDate,
   todayInTimezone,
-  type ComparisonSyncSummary,
 } from "../lib/comparison/sync";
+import type { ComparisonSyncSummary } from "../lib/comparison/types";
 
 type CliArgs = {
   startDate: string;

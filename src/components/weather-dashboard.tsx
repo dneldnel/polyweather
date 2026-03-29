@@ -9,14 +9,88 @@ import type {
   TemperatureTrend,
   TemperatureUnit,
   WeatherCard,
+  WeatherCardDetailResponse,
+  WeatherCardSummary,
   WeatherResponse,
   WeatherSignals,
+  WeatherSummarySignals,
 } from "../../lib/types";
 
 const SNAPSHOT_POLL_INTERVAL_MS = 750;
+const AUTO_REFRESH_MAX_AGE_MS = 5 * 60_000;
 const LOCAL_TIME_REFRESH_INTERVAL_MS = 60_000;
 const LOCAL_TIME_SORT_START_MINUTES = 11 * 60;
 const FORECAST_COMPACT_COLUMN_COUNT = 3;
+
+declare global {
+  interface Window {
+    __POLYWEATHER_HOME_INITIAL__?:
+      | {
+          url: string;
+          data: WeatherResponse;
+        }
+      | undefined;
+  }
+}
+
+let cachedBootstrappedHomeResponse: WeatherResponse | null | undefined;
+
+function getCurrentPathWithSearch(value: string) {
+  const url = new URL(value, window.location.origin);
+  return `${url.pathname}${url.search}`;
+}
+
+function readBootstrappedHomeResponse() {
+  if (cachedBootstrappedHomeResponse !== undefined) {
+    return cachedBootstrappedHomeResponse;
+  }
+
+  if (typeof window === "undefined") {
+    cachedBootstrappedHomeResponse = null;
+    return cachedBootstrappedHomeResponse;
+  }
+
+  const payload = window.__POLYWEATHER_HOME_INITIAL__;
+  if (!payload || payload.url !== getCurrentPathWithSearch(window.location.href)) {
+    cachedBootstrappedHomeResponse = null;
+    return cachedBootstrappedHomeResponse;
+  }
+
+  delete window.__POLYWEATHER_HOME_INITIAL__;
+  cachedBootstrappedHomeResponse = payload.data;
+  return cachedBootstrappedHomeResponse;
+}
+
+function isWeatherSnapshotFreshEnough(payload: WeatherResponse | null) {
+  if (!payload?.cards?.length || !payload.refreshedAt) {
+    return false;
+  }
+
+  const refreshedAtMs = new Date(payload.refreshedAt).getTime();
+  if (!Number.isFinite(refreshedAtMs)) {
+    return false;
+  }
+
+  return Date.now() - refreshedAtMs <= AUTO_REFRESH_MAX_AGE_MS;
+}
+
+async function fetchWeatherCardDetail(slug: string, signal?: AbortSignal) {
+  const response = await fetch(`/api/weather/card?slug=${encodeURIComponent(slug)}`, {
+    cache: "no-store",
+    headers: {
+      accept: "application/json",
+    },
+    signal,
+  });
+  const payload = (await response.json()) as WeatherCardDetailResponse | { error?: string };
+
+  if (!response.ok) {
+    throw new Error(payload.error?.trim() || `Failed to load weather card (${response.status})`);
+  }
+
+  return payload as WeatherCardDetailResponse;
+}
+
 const EMPTY_WEATHER_SIGNALS: WeatherSignals = {
   sourceId: "unknown",
   sourceLabel: "Weather signals",
@@ -36,6 +110,19 @@ const EMPTY_WEATHER_SIGNALS: WeatherSignals = {
   status: "missing",
   error: null,
   nextHours: [],
+};
+
+const EMPTY_WEATHER_SUMMARY_SIGNALS: WeatherSummarySignals = {
+  sourceId: "unknown",
+  weatherCode: null,
+  isDay: null,
+  sunset: null,
+  cloudCover: null,
+  precipitationProbability: null,
+  precipitation: null,
+  windSpeed: null,
+  status: "missing",
+  error: null,
 };
 
 function formatTemperature(reading: SourceReading, displayUnit: TemperatureUnit) {
@@ -207,7 +294,7 @@ type WeatherVisual = {
   label: string;
 };
 
-function getWeatherVisual(signals: WeatherSignals): WeatherVisual {
+function getWeatherVisual(signals: WeatherSummarySignals): WeatherVisual {
   const code = signals.weatherCode;
 
   if (code === 0) {
@@ -294,7 +381,7 @@ function getWeatherVisual(signals: WeatherSignals): WeatherVisual {
   };
 }
 
-function buildWeatherSummary(signals: WeatherSignals) {
+function buildWeatherSummary(signals: WeatherSummarySignals) {
   if (signals.status === "error") {
     return "Signals unavailable";
   }
@@ -1070,7 +1157,7 @@ function WeatherSummaryStrip({
   visual,
   summary,
 }: {
-  signals: WeatherSignals;
+  signals: WeatherSummarySignals;
   visual: WeatherVisual;
   summary: string;
 }) {
@@ -1173,6 +1260,75 @@ function NextHoursStrip({
   );
 }
 
+function WeatherCardTrendDetails({
+  card,
+  now,
+}: {
+  card: WeatherCard;
+  now: Date;
+}) {
+  const displayUnit = getAirportDisplayTemperatureUnit(card.airport);
+  const comparisonHref = buildCardComparisonHref(card);
+  const historyBasedLaterHigh = card.historyBasedLaterHigh ?? {
+    generatedAt: null,
+    method: null,
+    buckets: [],
+    status: "missing" as const,
+    error: null,
+  };
+
+  return (
+    <>
+      <ObservedTemperatureChart
+        trend={card.aviationWeatherTrend}
+        timezone={card.airport.timezone}
+        now={now}
+        displayUnit={displayUnit}
+      />
+
+      <HistoryBasedLaterHighPanel
+        curve={historyBasedLaterHigh}
+        comparisonHref={comparisonHref}
+        now={now}
+        timezone={card.airport.timezone}
+      />
+    </>
+  );
+}
+
+function WeatherCardNextHoursDetails({
+  card,
+}: {
+  card: WeatherCard;
+}) {
+  const displayUnit = getAirportDisplayTemperatureUnit(card.airport);
+  const availableSignals = Object.values(card.weatherSignalsBySource ?? {});
+  const [activeNextHoursSourceId, setActiveNextHoursSourceId] = useState(
+    card.defaultWeatherSignalsSourceId,
+  );
+  const nextHoursSignals = getCardWeatherSignals(card, activeNextHoursSourceId);
+
+  useEffect(() => {
+    if (
+      availableSignals.length > 0 &&
+      !availableSignals.some((entry) => entry.sourceId === activeNextHoursSourceId)
+    ) {
+      setActiveNextHoursSourceId(card.defaultWeatherSignalsSourceId);
+    }
+  }, [activeNextHoursSourceId, availableSignals, card.defaultWeatherSignalsSourceId]);
+
+  return (
+    <NextHoursStrip
+      availableSignals={availableSignals}
+      activeSourceId={nextHoursSignals.sourceId}
+      onSelectSource={setActiveNextHoursSourceId}
+      signals={nextHoursSignals}
+      displayUnit={displayUnit}
+      timezone={card.airport.timezone}
+    />
+  );
+}
+
 function WeatherCardView({
   card,
   now,
@@ -1180,7 +1336,7 @@ function WeatherCardView({
   disableRefresh,
   onRefresh,
 }: {
-  card: WeatherCard;
+  card: WeatherCardSummary;
   now: Date;
   isRefreshing: boolean;
   disableRefresh: boolean;
@@ -1192,21 +1348,19 @@ function WeatherCardView({
     card.airport.timezone,
   );
   const displayUnit = getAirportDisplayTemperatureUnit(card.airport);
-  const signals = getCardWeatherSignals(card);
+  const signals = card.defaultWeatherSignals ?? EMPTY_WEATHER_SUMMARY_SIGNALS;
   const signalVisual = getWeatherVisual(signals);
   const signalSummary = buildWeatherSummary(signals);
-  const availableSignals = Object.values(card.weatherSignalsBySource ?? {});
-  const comparisonHref = buildCardComparisonHref(card);
-  const [activeNextHoursSourceId, setActiveNextHoursSourceId] = useState(
-    card.defaultWeatherSignalsSourceId,
-  );
-  const historyBasedLaterHigh = card.historyBasedLaterHigh ?? {
-    generatedAt: null,
-    method: null,
-    buckets: [],
-    status: "missing" as const,
-    error: null,
-  };
+  const [detailCard, setDetailCard] = useState<WeatherCard | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [shouldLoadDetails, setShouldLoadDetails] = useState(false);
+  const cardRef = useRef<HTMLElement | null>(null);
+  const detailAbortRef = useRef<AbortController | null>(null);
+  const detailRequestRef = useRef(0);
+  const detailIsCurrent =
+    detailCard?.airport.slug === card.airport.slug &&
+    detailCard.cardUpdatedAt === card.cardUpdatedAt;
   const currentReadings = [
     {
       label: "WU now",
@@ -1248,19 +1402,98 @@ function WeatherCardView({
         ]
       : []),
   ];
-  const nextHoursSignals = getCardWeatherSignals(card, activeNextHoursSourceId);
+
+  const requestDetails = useEffectEvent(async () => {
+    if (detailLoading) {
+      return;
+    }
+
+    detailAbortRef.current?.abort();
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+
+    setDetailLoading(true);
+    setDetailError(null);
+
+    try {
+      const payload = await fetchWeatherCardDetail(card.airport.slug, controller.signal);
+      if (detailRequestRef.current !== requestId) {
+        return;
+      }
+
+      if (!payload.card) {
+        setDetailError("Details are still loading. Try again in a moment.");
+        return;
+      }
+
+      setDetailCard(payload.card);
+    } catch (error) {
+      if (controller.signal.aborted || detailRequestRef.current !== requestId) {
+        return;
+      }
+
+      const message =
+        error instanceof Error ? error.message : "Unexpected detail load failure";
+      setDetailError(message);
+    } finally {
+      if (detailRequestRef.current === requestId) {
+        setDetailLoading(false);
+      }
+    }
+  });
 
   useEffect(() => {
-    if (
-      availableSignals.length > 0 &&
-      !availableSignals.some((entry) => entry.sourceId === activeNextHoursSourceId)
-    ) {
-      setActiveNextHoursSourceId(card.defaultWeatherSignalsSourceId);
+    const node = cardRef.current;
+    if (!node) {
+      return;
     }
-  }, [activeNextHoursSourceId, availableSignals, card.defaultWeatherSignalsSourceId]);
+
+    if (typeof IntersectionObserver === "undefined") {
+      setShouldLoadDetails(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) {
+          return;
+        }
+
+        setShouldLoadDetails(true);
+        observer.disconnect();
+      },
+      {
+        rootMargin: "360px 0px",
+      },
+    );
+
+    observer.observe(node);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      detailAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!shouldLoadDetails || detailIsCurrent || detailLoading) {
+      return;
+    }
+
+    void requestDetails();
+  }, [card.cardUpdatedAt, detailIsCurrent, detailLoading, requestDetails, shouldLoadDetails]);
+
+  const detailStatus = detailError ?? (detailLoading ? "Loading details…" : null);
 
   return (
-    <article className="weather-card">
+    <article className="weather-card" ref={cardRef}>
       <div className="card-topline" />
       <header className="card-header">
         <div className="card-title-row">
@@ -1319,19 +1552,29 @@ function WeatherCardView({
         timezone={card.airport.timezone}
       />
 
-      <ObservedTemperatureChart
-        trend={card.aviationWeatherTrend}
-        timezone={card.airport.timezone}
-        now={now}
-        displayUnit={displayUnit}
-      />
+      {detailCard ? (
+        <WeatherCardTrendDetails card={detailCard} now={now} />
+      ) : (
+        <section className="trend-panel" aria-label="Observed temperature trend">
+          <div className="trend-header">
+            <p>AW observed today</p>
+            <span>{detailStatus ?? "Loading details…"}</span>
+          </div>
+          <div className="trend-empty">{detailStatus ?? "Loading details…"}</div>
+        </section>
+      )}
 
-      <HistoryBasedLaterHighPanel
-        curve={historyBasedLaterHigh}
-        comparisonHref={comparisonHref}
-        now={now}
-        timezone={card.airport.timezone}
-      />
+      {!detailCard ? (
+        <section className="history-probability-panel" aria-label="History-based later high probability">
+          <div className="history-probability-copy">
+            <div className="history-probability-heading">
+              <p>Later high odds</p>
+              <span>{detailStatus ?? "Loading details…"}</span>
+            </div>
+            <strong>—</strong>
+          </div>
+        </section>
+      ) : null}
 
       <section className="forecast-panel">
         <div className="forecast-header">
@@ -1344,14 +1587,17 @@ function WeatherCardView({
         />
       </section>
 
-      <NextHoursStrip
-        availableSignals={availableSignals}
-        activeSourceId={nextHoursSignals.sourceId}
-        onSelectSource={setActiveNextHoursSourceId}
-        signals={nextHoursSignals}
-        displayUnit={displayUnit}
-        timezone={card.airport.timezone}
-      />
+      {detailCard ? (
+        <WeatherCardNextHoursDetails card={detailCard} />
+      ) : (
+        <section className="next-hours-panel" aria-label="Next few hours forecast">
+          <div className="next-hours-header">
+            <p className="signals-section-label">Next few hours</p>
+            <span>{detailStatus ?? "Loading details…"}</span>
+          </div>
+          <p className="next-hours-empty">{detailStatus ?? "Loading details…"}</p>
+        </section>
+      )}
     </article>
   );
 }
@@ -1376,13 +1622,35 @@ function SkeletonCard({ city, stationIcao }: { city: string; stationIcao: string
 }
 
 export function WeatherDashboard() {
-  const [response, setResponse] = useState<WeatherResponse | null>(null);
-  const [initialLoading, setInitialLoading] = useState(true);
+  const initialResponse = readBootstrappedHomeResponse();
+  const [response, setResponse] = useState<WeatherResponse | null>(initialResponse);
+  const [initialLoading, setInitialLoading] = useState(
+    () => initialResponse === null,
+  );
   const [manualRefreshing, setManualRefreshing] = useState(false);
-  const [refreshingCards, setRefreshingCards] = useState<Record<string, boolean>>({});
+  const [pendingCardRefreshes, setPendingCardRefreshes] = useState<Record<string, boolean>>({});
   const [requestError, setRequestError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const stoppedRef = useRef(false);
+  const latestAcceptedResponseRef = useRef<WeatherResponse | null>(initialResponse);
+
+  function acceptSnapshot(payload: WeatherResponse) {
+    const currentPayload = latestAcceptedResponseRef.current;
+    if (
+      currentPayload &&
+      currentPayload.responseIssuedAt > payload.responseIssuedAt
+    ) {
+      return currentPayload;
+    }
+
+    latestAcceptedResponseRef.current = payload;
+    startTransition(() => {
+      setResponse(payload);
+      setRequestError(null);
+    });
+
+    return payload;
+  }
 
   async function fetchSnapshot(url: string, init?: RequestInit) {
     const result = await fetch(url, {
@@ -1395,15 +1663,13 @@ export function WeatherDashboard() {
       throw new Error(payload.globalError ?? `HTTP ${result.status}`);
     }
 
-    startTransition(() => {
-      setResponse(payload);
-      setRequestError(null);
-    });
-
-    return payload;
+    return acceptSnapshot(payload);
   }
 
-  async function pollUntilSettled(shouldStop: () => boolean) {
+  async function pollUntilSettled(
+    shouldStop: () => boolean,
+    isSettled: (payload: WeatherResponse) => boolean,
+  ) {
     while (!shouldStop()) {
       await new Promise((resolve) => setTimeout(resolve, SNAPSHOT_POLL_INTERVAL_MS));
       if (shouldStop()) {
@@ -1411,7 +1677,7 @@ export function WeatherDashboard() {
       }
 
       const payload = await fetchSnapshot("/api/weather");
-      if (payload.refreshState !== "refreshing") {
+      if (isSettled(payload)) {
         return;
       }
     }
@@ -1427,8 +1693,16 @@ export function WeatherDashboard() {
         method: "POST",
       });
 
-      if (payload.refreshState === "refreshing") {
-        await pollUntilSettled(shouldStop);
+      if (
+        payload.refreshState === "refreshing" ||
+        payload.refreshingCardSlugs.length > 0
+      ) {
+        await pollUntilSettled(
+          shouldStop,
+          (nextPayload) =>
+            nextPayload.refreshState !== "refreshing" &&
+            nextPayload.refreshingCardSlugs.length === 0,
+        );
       }
     } catch (error) {
       const message =
@@ -1445,15 +1719,22 @@ export function WeatherDashboard() {
   }
 
   async function performCardRefresh(slug: string, shouldStop: () => boolean) {
-    setRefreshingCards((current) => ({
+    setPendingCardRefreshes((current) => ({
       ...current,
       [slug]: true,
     }));
 
     try {
-      await fetchSnapshot(`/api/weather/refresh?slug=${encodeURIComponent(slug)}`, {
+      const payload = await fetchSnapshot(`/api/weather/refresh?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
       });
+
+      if (payload.refreshingCardSlugs.includes(slug)) {
+        await pollUntilSettled(
+          shouldStop,
+          (nextPayload) => !nextPayload.refreshingCardSlugs.includes(slug),
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unexpected refresh failure";
@@ -1462,7 +1743,7 @@ export function WeatherDashboard() {
       }
     } finally {
       if (!shouldStop()) {
-        setRefreshingCards((current) => {
+        setPendingCardRefreshes((current) => {
           if (!current[slug]) {
             return current;
           }
@@ -1477,6 +1758,29 @@ export function WeatherDashboard() {
   }
 
   const refreshOnMount = useEffectEvent(async (shouldStop: () => boolean) => {
+    const currentPayload = latestAcceptedResponseRef.current;
+    if (currentPayload) {
+      if (
+        currentPayload.refreshState === "refreshing" ||
+        currentPayload.refreshingCardSlugs.length > 0
+      ) {
+        await pollUntilSettled(
+          shouldStop,
+          (nextPayload) =>
+            nextPayload.refreshState !== "refreshing" &&
+            nextPayload.refreshingCardSlugs.length === 0,
+        );
+        return;
+      }
+
+      if (isWeatherSnapshotFreshEnough(currentPayload)) {
+        if (!shouldStop()) {
+          setInitialLoading(false);
+        }
+        return;
+      }
+    }
+
     await performRefresh("initial", shouldStop);
   });
 
@@ -1503,7 +1807,11 @@ export function WeatherDashboard() {
   const cards = response?.cards ?? null;
   const cardMap = new Map((cards ?? []).map((card) => [card.airport.slug, card]));
   const issueSummary = requestError ?? response?.globalError ?? null;
-  const hasRefreshingCards = Object.keys(refreshingCards).length > 0;
+  const refreshingCardSlugs = response?.refreshingCardSlugs ?? [];
+  const hasRefreshingCards =
+    refreshingCardSlugs.length > 0 || Object.keys(pendingCardRefreshes).length > 0;
+  const isCardRefreshing = (slug: string) =>
+    Boolean(pendingCardRefreshes[slug]) || refreshingCardSlugs.includes(slug);
   const sortedAirports = [...AIRPORTS].sort((left, right) => {
     const timeDifference =
       getLocalTimeSortKey(now, left.timezone) - getLocalTimeSortKey(now, right.timezone);
@@ -1553,12 +1861,12 @@ export function WeatherDashboard() {
                 key={card.airport.slug}
                 card={card}
                 now={now}
-                isRefreshing={Boolean(refreshingCards[card.airport.slug])}
+                isRefreshing={isCardRefreshing(card.airport.slug)}
                 disableRefresh={
                   initialLoading ||
                   manualRefreshing ||
                   response?.refreshState === "refreshing" ||
-                  Boolean(refreshingCards[card.airport.slug])
+                  isCardRefreshing(card.airport.slug)
                 }
                 onRefresh={(slug) =>
                   void performCardRefresh(slug, () => stoppedRef.current)

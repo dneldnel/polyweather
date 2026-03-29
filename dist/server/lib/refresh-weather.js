@@ -7,12 +7,18 @@ exports.refreshAndRespond = refreshAndRespond;
 exports.refreshCardAndRespond = refreshCardAndRespond;
 const airports_1 = require("./airports");
 const db_1 = require("./comparison/db");
+const homepage_refresh_priority_1 = require("./homepage-refresh-priority");
 const signal_model_config_1 = require("./signal-model-config");
 const store_1 = require("./store");
 const temperature_1 = require("./temperature");
 const USER_AGENT = "polyweather-web/0.1";
 const REQUEST_TIMEOUT_MS = 12_000;
+const OPEN_METEO_REQUEST_CONCURRENCY = 4;
+const OPEN_METEO_MAX_RETRIES = 2;
+const OPEN_METEO_RETRY_BASE_DELAY_MS = 750;
 const CITY_CONCURRENCY = 4;
+let activeOpenMeteoRequests = 0;
+const queuedOpenMeteoRequests = [];
 const OPEN_METEO_MODELS = {
     ecmwf: {
         label: "Open-Meteo ECMWF",
@@ -130,6 +136,61 @@ async function fetchJson(url) {
         throw new Error(`HTTP ${response.status}`);
     }
     return (await response.json());
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function withOpenMeteoRequestSlot(task) {
+    if (activeOpenMeteoRequests >= OPEN_METEO_REQUEST_CONCURRENCY) {
+        await new Promise((resolve) => {
+            queuedOpenMeteoRequests.push(resolve);
+        });
+    }
+    activeOpenMeteoRequests += 1;
+    try {
+        return await task();
+    }
+    finally {
+        activeOpenMeteoRequests -= 1;
+        queuedOpenMeteoRequests.shift()?.();
+    }
+}
+function getOpenMeteoRetryDelayMs(response, attempt) {
+    const retryAfter = response.headers.get("retry-after");
+    if (retryAfter) {
+        const retryAfterSeconds = Number(retryAfter);
+        if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+            return retryAfterSeconds * 1000;
+        }
+        const retryAfterDate = Date.parse(retryAfter);
+        if (Number.isFinite(retryAfterDate)) {
+            return Math.max(retryAfterDate - Date.now(), 0);
+        }
+    }
+    return OPEN_METEO_RETRY_BASE_DELAY_MS * 2 ** attempt;
+}
+async function fetchOpenMeteoJson(url) {
+    let lastError = null;
+    for (let attempt = 0; attempt <= OPEN_METEO_MAX_RETRIES; attempt += 1) {
+        const response = await withOpenMeteoRequestSlot(() => fetch(url, {
+            headers: {
+                accept: "application/json",
+                "user-agent": USER_AGENT,
+            },
+            cache: "no-store",
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        }));
+        if (response.ok) {
+            return (await response.json());
+        }
+        lastError = new Error(`HTTP ${response.status}`);
+        const shouldRetry = response.status === 429 || response.status >= 500;
+        if (!shouldRetry || attempt === OPEN_METEO_MAX_RETRIES) {
+            throw lastError;
+        }
+        await sleep(getOpenMeteoRetryDelayMs(response, attempt));
+    }
+    throw lastError ?? new Error("Open-Meteo request failed");
 }
 async function fetchRawResponse(url) {
     return fetch(url, {
@@ -280,7 +341,7 @@ async function fetchSignalModelMetadata(model) {
     if (existingPromise) {
         return existingPromise;
     }
-    const promise = fetchJson(model.metaUrl)
+    const promise = fetchOpenMeteoJson(model.metaUrl)
         .then((value) => {
         cachedSignalModelMetadata.set(model.forecastModel, {
             fetchedAtMs: Date.now(),
@@ -482,7 +543,7 @@ async function fetchOpenMeteoTodayHigh(airport, model) {
         temperatureUnit +
         `&forecast_days=2` +
         `&models=${model.upstreamModel}`;
-    const payload = await fetchJson(url);
+    const payload = await fetchOpenMeteoJson(url);
     const times = payload.daily?.time ?? [];
     const maxima = payload.daily?.temperature_2m_max ?? [];
     const index = times.findIndex((value) => value === airportToday);
@@ -514,7 +575,7 @@ async function fetchOpenMeteoSignals(airport, model) {
         `&forecast_hours=6` +
         `&timezone=${encodeURIComponent(airport.timezone)}`;
     const [payload, metadata] = await Promise.all([
-        fetchJson(url),
+        fetchOpenMeteoJson(url),
         fetchSignalModelMetadata(model),
     ]);
     const current = payload.current;
@@ -748,16 +809,26 @@ function startWeatherSnapshotRefresh() {
                 globalError: null,
             };
         const previousCards = new Map((previousSnapshot?.cards ?? []).map((card) => [card.airport.slug, card]));
-        const cards = await mapWithConcurrency(airports_1.AIRPORTS, CITY_CONCURRENCY, async (airport) => {
-            const card = await refreshCard(airport, previousCards.get(airport.slug));
-            const currentSnapshot = store.snapshot;
-            store.snapshot = {
-                refreshedAt: currentSnapshot?.refreshedAt ?? null,
-                cards: upsertCard(currentSnapshot?.cards ?? null, card),
-                globalError: null,
-            };
-            return card;
-        });
+        const { priorityAirports, remainingAirports } = (0, homepage_refresh_priority_1.splitHomepageRefreshAirports)(airports_1.AIRPORTS);
+        const orderedCards = [];
+        for (const batch of [priorityAirports, remainingAirports]) {
+            if (batch.length === 0) {
+                continue;
+            }
+            const batchCards = await mapWithConcurrency(batch, CITY_CONCURRENCY, async (airport) => {
+                const card = await refreshCard(airport, previousCards.get(airport.slug));
+                const currentSnapshot = store.snapshot;
+                store.snapshot = {
+                    refreshedAt: currentSnapshot?.refreshedAt ?? null,
+                    cards: upsertCard(currentSnapshot?.cards ?? null, card),
+                    globalError: null,
+                };
+                return card;
+            });
+            orderedCards.push(...batchCards);
+        }
+        const cards = orderedCards.sort((left, right) => airports_1.AIRPORTS.findIndex((airport) => airport.slug === left.airport.slug) -
+            airports_1.AIRPORTS.findIndex((airport) => airport.slug === right.airport.slug));
         return finalizeSnapshot(cards, new Date().toISOString());
     })
         .then((snapshot) => {
@@ -851,7 +922,7 @@ async function refreshAndRespond() {
     return (0, store_1.buildWeatherResponse)();
 }
 async function refreshCardAndRespond(slug) {
-    await startWeatherCardRefresh(slug);
+    startWeatherCardRefresh(slug);
     return (0, store_1.buildWeatherResponse)();
 }
 //# sourceMappingURL=refresh-weather.js.map

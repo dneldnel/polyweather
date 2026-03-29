@@ -283,6 +283,52 @@ a {
   padding: 16px;
 }
 
+.comparison-sync-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.comparison-sync-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.comparison-sync-button {
+  min-width: 136px;
+}
+
+.comparison-sync-toggle {
+  min-height: 46px;
+  padding: 11px 18px;
+  border: 1px solid rgba(120, 168, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(10, 25, 46, 0.72);
+  color: #f4f8ff;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.comparison-sync-toggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(120, 168, 255, 0.55);
+  background: rgba(17, 37, 67, 0.88);
+}
+
+.comparison-sync-alert {
+  margin-bottom: 0;
+}
+
+.comparison-sync-compact-bar {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
 .comparison-overview-panel {
   display: grid;
   gap: 14px;
@@ -648,6 +694,62 @@ a {
 .comparison-job-stat strong {
   font-size: 1rem;
   line-height: 1.4;
+}
+
+.comparison-sync-grid {
+  margin-bottom: 0;
+}
+
+.comparison-sync-status.is-running {
+  color: #7fc5ff;
+}
+
+.comparison-sync-status.is-completed {
+  color: var(--fresh);
+}
+
+.comparison-sync-status.is-failed {
+  color: var(--error);
+}
+
+.comparison-sync-log {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid rgba(145, 171, 211, 0.12);
+}
+
+.comparison-sync-log-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid rgba(145, 171, 211, 0.12);
+}
+
+.comparison-sync-log-item:first-child {
+  border-top: 0;
+}
+
+.comparison-sync-log-item span {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.comparison-sync-log-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  font-weight: 600;
 }
 
 .weather-card {
@@ -1909,7 +2011,8 @@ a {
 
   .secondary-action-link,
   .refresh-button,
-  .comparison-apply-button {
+  .comparison-apply-button,
+  .comparison-sync-toggle {
     width: 100%;
   }
 

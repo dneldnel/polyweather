@@ -71,6 +71,25 @@ export type WeatherSignals = {
 
 export type WeatherSignalsBySource = Record<string, WeatherSignals>;
 
+export type WeatherSummarySignals = {
+  sourceId: string;
+  weatherCode: number | null;
+  isDay: boolean | null;
+  sunset: string | null;
+  cloudCover: number | null;
+  precipitationProbability: number | null;
+  precipitation: number | null;
+  windSpeed: number | null;
+  status: SourceStatus;
+  error: string | null;
+};
+
+export type OpenMeteoTodayHighReadings = {
+  ecmwf: SourceReading;
+  gfs: SourceReading;
+  highPrecision: SourceReading | null;
+};
+
 export type HistoryBasedLaterHighBucket = {
   hour: number;
   probability: number;
@@ -98,11 +117,17 @@ export type WeatherCard = {
   aviationWeatherTrend: TemperatureTrend;
   defaultWeatherSignalsSourceId: string;
   weatherSignalsBySource: WeatherSignalsBySource;
-  openMeteoTodayHigh: {
-    ecmwf: SourceReading;
-    gfs: SourceReading;
-    highPrecision: SourceReading | null;
-  };
+  openMeteoTodayHigh: OpenMeteoTodayHighReadings;
+};
+
+export type WeatherCardSummary = {
+  airport: AirportConfig;
+  cardUpdatedAt: string | null;
+  wuCurrent: SourceReading;
+  wuTodayHigh: SourceReading;
+  aviationWeatherCurrent: SourceReading;
+  defaultWeatherSignals: WeatherSummarySignals;
+  openMeteoTodayHigh: OpenMeteoTodayHighReadings;
 };
 
 export type WeatherSnapshot = {
@@ -111,6 +136,20 @@ export type WeatherSnapshot = {
   globalError: string | null;
 };
 
-export type WeatherResponse = WeatherSnapshot & {
+export type WeatherSummarySnapshot = {
+  refreshedAt: string | null;
+  cards: WeatherCardSummary[] | null;
+  globalError: string | null;
+};
+
+export type WeatherResponse = WeatherSummarySnapshot & {
   refreshState: RefreshState;
+  refreshingCardSlugs: string[];
+  responseIssuedAt: string;
+};
+
+export type WeatherCardDetailResponse = {
+  card: WeatherCard | null;
+  error: string | null;
+  responseIssuedAt: string;
 };

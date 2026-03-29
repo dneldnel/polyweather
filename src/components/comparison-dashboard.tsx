@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Form, Link } from "react-router-dom";
+import {
+  startTransition,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { Form, Link, useRevalidator } from "react-router-dom";
 
 import { AIRPORTS } from "../../lib/airports";
 import { buildComparisonHref } from "../../lib/comparison/query";
@@ -10,6 +17,9 @@ import type {
   ComparisonCityReport,
   ComparisonDayDetail,
   ComparisonDayRecord,
+  ComparisonSyncJobLookupResponse,
+  ComparisonSyncJobSnapshot,
+  ComparisonSyncJobStartResponse,
   ComparisonPolymarketDay,
   ComparisonReport,
   ComparisonTemperaturePoint,
@@ -37,6 +47,7 @@ const HISTORICAL_CHART_VIEWBOX_HEIGHT = 144;
 const HISTORICAL_CHART_DAY_MINUTES = 1440;
 const HISTORICAL_CHART_TOP = 10;
 const HISTORICAL_CHART_BOTTOM = HISTORICAL_CHART_VIEWBOX_HEIGHT - 20;
+const COMPARISON_SYNC_POLL_INTERVAL_MS = 2_000;
 
 type HistoricalChartPoint = {
   observedAt: string;
@@ -57,6 +68,60 @@ type HistoricalChartHoverState = {
   snappedIndex: number | null;
   pointerX: number;
 };
+
+async function readJson<T>(response: Response): Promise<T> {
+  return (await response.json()) as T;
+}
+
+function formatComparisonSyncStatus(status: ComparisonSyncJobSnapshot["status"]) {
+  if (status === "completed") {
+    return "Completed";
+  }
+
+  if (status === "failed") {
+    return "Failed";
+  }
+
+  return "Running";
+}
+
+function formatComparisonSyncScope(job: ComparisonSyncJobSnapshot) {
+  return `${job.startDate}..${job.endDate}${job.cityFilter ? ` · ${job.cityFilter}` : " · all cities"}`;
+}
+
+function formatComparisonSyncTimestamp(value: string | null) {
+  if (!value) {
+    return "—";
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
+}
+
+function formatComparisonSyncLogTimestamp(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(timestamp);
+}
+
+function normalizeCityFilter(value: string | null | undefined) {
+  return value?.trim() || null;
+}
 
 function formatNumber(value: number | null) {
   if (typeof value !== "number") {
@@ -624,6 +689,174 @@ function ComparisonDayDetailPanel({
   );
 }
 
+function ComparisonSyncPanel({
+  job,
+  requestError,
+  isStartingSync,
+  isPageLoading,
+  onRunSync,
+  statusLabel,
+}: {
+  job: ComparisonSyncJobSnapshot | null;
+  requestError: string | null;
+  isStartingSync: boolean;
+  isPageLoading: boolean;
+  onRunSync: () => void;
+  statusLabel?: string;
+}) {
+  const [isExpanded, setIsExpanded] = useState(() => !job || job.status === "running");
+  const previousJobStateRef = useRef<{
+    id: string | null;
+    status: ComparisonSyncJobSnapshot["status"] | null;
+  }>({
+    id: job?.id ?? null,
+    status: job?.status ?? null,
+  });
+  const isSyncRunning = job?.status === "running";
+  const buttonLabel = isStartingSync ? "Starting…" : isSyncRunning ? "Syncing…" : "Run sync";
+  const recentMessages = job ? [...job.recentMessages].reverse().slice(0, 6) : [];
+  const cityProgressLabel =
+    job?.status === "running" && job.currentCity
+      ? `${job.currentCity} · ${job.completedCities}/${job.totalCities} cities finished`
+      : job
+        ? `${job.completedCities}/${job.totalCities} cities finished`
+        : "No comparison sync has run in this server process yet.";
+  const compactSummary = job
+    ? `${formatComparisonSyncStatus(job.status)} · ${job.progressPercent}% · ${formatComparisonSyncScope(job)}`
+    : "No comparison sync has run in this server process yet.";
+
+  useEffect(() => {
+    const previousJob = previousJobStateRef.current;
+
+    if (job && job.id !== previousJob.id && job.status === "running") {
+      setIsExpanded(true);
+    } else if (
+      job &&
+      job.id === previousJob.id &&
+      previousJob.status === "running" &&
+      job.status !== "running"
+    ) {
+      setIsExpanded(false);
+    } else if (!job && previousJob.id !== null) {
+      setIsExpanded(true);
+    }
+
+    previousJobStateRef.current = {
+      id: job?.id ?? null,
+      status: job?.status ?? null,
+    };
+  }, [job]);
+
+  return (
+    <section className="comparison-summary-panel comparison-sync-panel">
+      <div className="comparison-panel-heading">
+        <div>
+          <h2>Raw Comparison Sync</h2>
+          <p>{statusLabel ?? "Runs the persisted settlement comparison refresh in the background."}</p>
+        </div>
+        <div className="comparison-sync-actions">
+          <button
+            className="refresh-button comparison-sync-button"
+            type="button"
+            onClick={() => void onRunSync()}
+            disabled={isPageLoading || isStartingSync || isSyncRunning}
+          >
+            {buttonLabel}
+          </button>
+          <button
+            className="comparison-sync-toggle"
+            type="button"
+            onClick={() => {
+              setIsExpanded((current) => !current);
+            }}
+            aria-expanded={isExpanded}
+          >
+            {isExpanded ? "Collapse" : "Expand"}
+          </button>
+        </div>
+      </div>
+
+      <div className="comparison-meta-bar comparison-sync-compact-bar">
+        <p>{compactSummary}</p>
+        <p>{job ? job.stepLabel : "Run the sync to refresh the persisted comparison rows."}</p>
+      </div>
+
+      {requestError ? (
+        <section className="alert-banner comparison-sync-alert" role="status">
+          {requestError}
+        </section>
+      ) : null}
+
+      {job && isExpanded ? (
+        <>
+          <div className="comparison-job-grid comparison-sync-grid">
+            <div className="comparison-job-stat">
+              <span>Status</span>
+              <strong className={`comparison-sync-status is-${job.status}`}>
+                {formatComparisonSyncStatus(job.status)}
+              </strong>
+            </div>
+            <div className="comparison-job-stat">
+              <span>Window</span>
+              <strong>{formatComparisonSyncScope(job)}</strong>
+            </div>
+            <div className="comparison-job-stat">
+              <span>Progress</span>
+              <strong>{job.progressPercent}%</strong>
+            </div>
+            <div className="comparison-job-stat">
+              <span>Updated</span>
+              <strong>{formatComparisonSyncTimestamp(job.updatedAt)}</strong>
+            </div>
+          </div>
+
+          <div className="comparison-meta-bar">
+            <p>{job.stepLabel}</p>
+            <p>{cityProgressLabel}</p>
+          </div>
+
+          {job.summary ? (
+            <div className="comparison-job-grid comparison-sync-grid">
+              <div className="comparison-job-stat">
+                <span>Cities</span>
+                <strong>{job.summary.citiesProcessed}</strong>
+              </div>
+              <div className="comparison-job-stat">
+                <span>PM days</span>
+                <strong>{job.summary.polymarketDaysUpserted}</strong>
+              </div>
+              <div className="comparison-job-stat">
+                <span>WU points</span>
+                <strong>{job.summary.wuObservationPointsUpserted}</strong>
+              </div>
+              <div className="comparison-job-stat">
+                <span>AW points</span>
+                <strong>{job.summary.awObservationPointsUpserted}</strong>
+              </div>
+            </div>
+          ) : null}
+
+          {recentMessages.length > 0 ? (
+            <ul className="comparison-sync-log">
+              {recentMessages.map((entry, index) => (
+                <li key={`${entry.timestamp}-${index}`} className="comparison-sync-log-item">
+                  <span>{formatComparisonSyncLogTimestamp(entry.timestamp)}</span>
+                  <strong>{entry.message}</strong>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : !job && isExpanded ? (
+        <div className="comparison-meta-bar">
+          <p>Run the sync to refresh the persisted comparison rows for the current date window.</p>
+          <p>The page stays interactive while the job reports progress in the background.</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function ComparisonCitySection({
   city,
   startDate,
@@ -776,11 +1009,203 @@ export function ComparisonDashboard({
   initialCityDetail,
   initialDayDetail,
   initialEarliestResolvedDate,
+  statusLabel,
   isLoading = false,
 }: ComparisonDashboardProps) {
   const report = initialReport;
   const activeCity = initialCityDetail;
-  const selectedCityValue = activeCity?.airport.slug ?? "";
+  const selectedCityValue =
+    activeCity?.airport.slug ??
+    normalizeCityFilter(report.cityFilter) ??
+    normalizeCityFilter(initialCity) ??
+    "";
+  const revalidator = useRevalidator();
+  const stoppedRef = useRef(false);
+  const pollingJobIdRef = useRef<string | null>(null);
+  const previousSyncJobRef = useRef<ComparisonSyncJobSnapshot | null>(null);
+  const latestAcceptedJobRef = useRef<ComparisonSyncJobSnapshot | null>(null);
+  const [syncJob, setSyncJob] = useState<ComparisonSyncJobSnapshot | null>(null);
+  const [syncRequestError, setSyncRequestError] = useState<string | null>(null);
+  const [isStartingSync, setIsStartingSync] = useState(false);
+
+  function acceptSyncJob(job: ComparisonSyncJobSnapshot | null) {
+    const currentJob = latestAcceptedJobRef.current;
+    if (
+      job &&
+      currentJob &&
+      currentJob.id === job.id &&
+      currentJob.updatedAt > job.updatedAt
+    ) {
+      return currentJob;
+    }
+
+    latestAcceptedJobRef.current = job;
+    startTransition(() => {
+      setSyncJob(job);
+      setSyncRequestError(null);
+    });
+
+    return job;
+  }
+
+  async function fetchComparisonSyncLookup(url: string) {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        accept: "application/json",
+      },
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | ComparisonSyncJobLookupResponse
+      | { error?: string }
+      | null;
+
+    if (!response.ok) {
+      const errorMessage = payload && "error" in payload ? payload.error?.trim() : null;
+      throw new Error(
+        errorMessage || `Failed to load comparison sync status (${response.status})`,
+      );
+    }
+
+    return payload as ComparisonSyncJobLookupResponse;
+  }
+
+  async function startComparisonSyncRequest() {
+    const response = await fetch("/api/comparison/sync", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      cache: "no-store",
+      body: JSON.stringify({
+        startDate: report.startDate,
+        endDate: report.endDate,
+        city: normalizeCityFilter(report.cityFilter),
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | ComparisonSyncJobStartResponse
+      | { error?: string }
+      | null;
+
+    if (!response.ok) {
+      const errorMessage = payload && "error" in payload ? payload.error?.trim() : null;
+      throw new Error(
+        errorMessage || `Failed to start comparison sync (${response.status})`,
+      );
+    }
+
+    return payload as ComparisonSyncJobStartResponse;
+  }
+
+  const pollComparisonSyncJob = useEffectEvent(async (jobId: string, shouldStop: () => boolean) => {
+    if (pollingJobIdRef.current === jobId) {
+      return;
+    }
+
+    pollingJobIdRef.current = jobId;
+
+    try {
+      while (!shouldStop()) {
+        await new Promise((resolve) => setTimeout(resolve, COMPARISON_SYNC_POLL_INTERVAL_MS));
+        if (shouldStop()) {
+          return;
+        }
+
+        const payload = await fetchComparisonSyncLookup(
+          `/api/comparison/sync/${encodeURIComponent(jobId)}`,
+        );
+        const nextJob = acceptSyncJob(payload.job);
+        if (!nextJob || nextJob.status !== "running") {
+          return;
+        }
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unexpected comparison sync failure";
+      if (!shouldStop()) {
+        setSyncRequestError(message);
+      }
+    } finally {
+      if (pollingJobIdRef.current === jobId) {
+        pollingJobIdRef.current = null;
+      }
+    }
+  });
+
+  const loadLatestComparisonSyncJob = useEffectEvent(async (shouldStop: () => boolean) => {
+    try {
+      const payload = await fetchComparisonSyncLookup("/api/comparison/sync");
+      if (shouldStop()) {
+        return;
+      }
+
+      const latestJob = acceptSyncJob(payload.job);
+      if (latestJob?.status === "running") {
+        await pollComparisonSyncJob(latestJob.id, shouldStop);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unexpected comparison sync failure";
+      if (!shouldStop()) {
+        setSyncRequestError(message);
+      }
+    }
+  });
+
+  const runComparisonSync = useEffectEvent(async () => {
+    setIsStartingSync(true);
+    setSyncRequestError(null);
+
+    try {
+      const payload = await startComparisonSyncRequest();
+      const job = acceptSyncJob(payload.job);
+      if (job && job.status === "running") {
+        await pollComparisonSyncJob(job.id, () => stoppedRef.current);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unexpected comparison sync failure";
+      if (!stoppedRef.current) {
+        setSyncRequestError(message);
+      }
+    } finally {
+      if (!stoppedRef.current) {
+        setIsStartingSync(false);
+      }
+    }
+  });
+
+  useEffect(() => {
+    stoppedRef.current = false;
+
+    void loadLatestComparisonSyncJob(() => stoppedRef.current);
+
+    return () => {
+      stoppedRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousJob = previousSyncJobRef.current;
+    const currentJob = syncJob;
+
+    if (
+      previousJob &&
+      currentJob &&
+      previousJob.id === currentJob.id &&
+      previousJob.status === "running" &&
+      currentJob.status === "completed" &&
+      currentJob.startDate === report.startDate &&
+      currentJob.endDate === report.endDate &&
+      normalizeCityFilter(currentJob.cityFilter) === normalizeCityFilter(report.cityFilter)
+    ) {
+      revalidator.revalidate();
+    }
+
+    previousSyncJobRef.current = currentJob;
+  }, [revalidator, report.cityFilter, report.endDate, report.startDate, syncJob]);
 
   return (
     <main className="page-shell comparison-shell">
@@ -798,6 +1223,7 @@ export function ComparisonDashboard({
 
       <section className="comparison-summary-panel comparison-filter-panel">
         <Form
+          aria-label="Comparison filters"
           action="/comparison"
           className="comparison-filter-bar comparison-filter-bar-embedded comparison-filter-bar-panel"
           method="get"
@@ -844,6 +1270,15 @@ export function ComparisonDashboard({
           <p>Select a city to load resolved dates and inspect daily curves.</p>
         </section>
       )}
+
+      <ComparisonSyncPanel
+        job={syncJob}
+        requestError={syncRequestError}
+        isStartingSync={isStartingSync}
+        isPageLoading={isLoading}
+        onRunSync={runComparisonSync}
+        statusLabel={statusLabel}
+      />
     </main>
   );
 }

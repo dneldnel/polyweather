@@ -102,6 +102,76 @@ export type ComparisonReport = {
   cities: ComparisonCityReport[];
 };
 
+export type ComparisonSyncSummary = {
+  generatedAt: string;
+  startDate: string;
+  endDate: string;
+  cityFilter: string | null;
+  databaseUrl: string;
+  citiesProcessed: number;
+  polymarketDaysUpserted: number;
+  wuObservationPointsUpserted: number;
+  awObservationPointsUpserted: number;
+  futureHighStatBucketsWritten: number;
+};
+
+export type ComparisonSyncProgressStage =
+  | "starting"
+  | "fetching"
+  | "persisting"
+  | "rebuilding-future-high-stats"
+  | "completed"
+  | "failed";
+
+export type ComparisonSyncProgressEvent = {
+  stage: ComparisonSyncProgressStage;
+  message: string;
+  totalCities: number;
+  cityIndex: number | null;
+  completedCities: number;
+  citySlug: string | null;
+  city: string | null;
+  progressFraction: number;
+};
+
+export type ComparisonSyncJobStatus = "running" | "completed" | "failed";
+
+export type ComparisonSyncJobLogEntry = {
+  timestamp: string;
+  message: string;
+};
+
+export type ComparisonSyncJobSnapshot = {
+  id: string;
+  status: ComparisonSyncJobStatus;
+  stage: ComparisonSyncProgressStage;
+  requestedAt: string;
+  startedAt: string;
+  finishedAt: string | null;
+  updatedAt: string;
+  startDate: string;
+  endDate: string;
+  cityFilter: string | null;
+  totalCities: number;
+  completedCities: number;
+  currentCitySlug: string | null;
+  currentCity: string | null;
+  progressPercent: number;
+  stepLabel: string;
+  recentMessages: ComparisonSyncJobLogEntry[];
+  summary: ComparisonSyncSummary | null;
+  error: string | null;
+};
+
+export type ComparisonSyncJobStartResponse = {
+  job: ComparisonSyncJobSnapshot;
+  reusedExistingJob: boolean;
+};
+
+export type ComparisonSyncJobLookupResponse = {
+  job: ComparisonSyncJobSnapshot | null;
+};
+
 export type StoredWundergroundObservation = {
   citySlug: string;
   localDate: string;

@@ -23,6 +23,19 @@ const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
 function logProgress(message) {
     console.error(`[${new Date().toISOString()}] ${message}`);
 }
+function clampProgressFraction(value) {
+    if (!Number.isFinite(value)) {
+        return 0;
+    }
+    return Math.min(Math.max(value, 0), 1);
+}
+function emitProgress(options, event) {
+    logProgress(event.message);
+    options?.onProgress?.({
+        ...event,
+        progressFraction: clampProgressFraction(event.progressFraction),
+    });
+}
 function shiftDate(date, offsetDays) {
     const cursor = new Date(`${date}T00:00:00Z`);
     cursor.setUTCDate(cursor.getUTCDate() + offsetDays);
@@ -51,6 +64,17 @@ function enumerateDateWindows(startDate, endDate, windowDays) {
         cursor = shiftDate(boundedEnd, 1);
     }
     return windows;
+}
+function getAviationObservationWindows(startDate, endDate) {
+    const earliestArchiveDate = shiftDate(todayInTimezone("UTC"), -(AVIATION_WEATHER_ARCHIVE_DAYS - 1));
+    const effectiveStartDate = startDate < earliestArchiveDate ? earliestArchiveDate : startDate;
+    if (effectiveStartDate > endDate) {
+        return [];
+    }
+    return enumerateDateWindows(effectiveStartDate, endDate, AVIATION_WEATHER_WINDOW_DAYS);
+}
+function getWundergroundObservationWindows(startDate, endDate) {
+    return enumerateDateWindows(startDate, endDate, WUNDERGROUND_HISTORY_WINDOW_DAYS);
 }
 function formatDateInTimezone(date, timeZone) {
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -359,16 +383,12 @@ async function fetchAviationObservationRowsForWindow(config, startDate, endDate,
     }
     return [...uniqueRows.values()].sort((left, right) => left.observedAtUtc.localeCompare(right.observedAtUtc));
 }
-async function fetchAviationObservationRowsForCity(config, startDate, endDate, fetchedAt) {
-    const earliestArchiveDate = shiftDate(todayInTimezone("UTC"), -(AVIATION_WEATHER_ARCHIVE_DAYS - 1));
-    const effectiveStartDate = startDate < earliestArchiveDate ? earliestArchiveDate : startDate;
-    if (effectiveStartDate > endDate) {
-        return [];
-    }
-    const windows = enumerateDateWindows(effectiveStartDate, endDate, AVIATION_WEATHER_WINDOW_DAYS);
+async function fetchAviationObservationRowsForCity(config, startDate, endDate, fetchedAt, options) {
+    const windows = getAviationObservationWindows(startDate, endDate);
     const rowsByObservedAtUtc = new Map();
-    for (const window of windows) {
+    for (const [index, window] of windows.entries()) {
         const rows = await fetchAviationObservationRowsForWindow(config, window.startDate, window.endDate, fetchedAt);
+        options?.onWindowComplete?.(window, index + 1, windows.length);
         for (const row of rows) {
             rowsByObservedAtUtc.set(row.observedAtUtc, row);
         }
@@ -433,19 +453,21 @@ async function fetchWundergroundObservationRowsForWindow(config, startDate, endD
     }
     return rows;
 }
-async function fetchWundergroundObservationRowsForCity(config, startDate, endDate, fetchedAt) {
-    const windows = enumerateDateWindows(startDate, endDate, WUNDERGROUND_HISTORY_WINDOW_DAYS);
+async function fetchWundergroundObservationRowsForCity(config, startDate, endDate, fetchedAt, options) {
+    const windows = getWundergroundObservationWindows(startDate, endDate);
     const rowsByObservedAtUtc = new Map();
-    for (const window of windows) {
+    for (const [index, window] of windows.entries()) {
         const rows = await fetchWundergroundObservationRowsForWindow(config, window.startDate, window.endDate, fetchedAt);
+        options?.onWindowComplete?.(window, index + 1, windows.length);
         for (const row of rows) {
             rowsByObservedAtUtc.set(row.observedAtUtc, row);
         }
     }
     return [...rowsByObservedAtUtc.values()].sort((left, right) => left.observedAtUtc.localeCompare(right.observedAtUtc));
 }
-async function fetchPolymarketDayRowsForCity(config, startDate, endDate, fetchedAt) {
+async function fetchPolymarketDayRowsForCity(config, startDate, endDate, fetchedAt, options) {
     const days = await Promise.all(enumerateDates(startDate, endDate).map((date) => fetchPolymarketDay(config, date)));
+    options?.onComplete?.(days.length);
     return days
         .filter((day) => day.status !== "missing")
         .map((day) => ({
@@ -458,15 +480,51 @@ async function fetchPolymarketDayRowsForCity(config, startDate, endDate, fetched
         fetchedAt,
     }));
 }
-async function syncComparisonCity(config, startDate, endDate) {
+async function syncComparisonCity(config, startDate, endDate, progressContext) {
     const fetchedAt = new Date().toISOString();
-    logProgress(`${config.city}: fetching WU, AW, and Polymarket history`);
+    const totalFetchUnits = getWundergroundObservationWindows(startDate, endDate).length +
+        getAviationObservationWindows(startDate, endDate).length +
+        1;
+    let completedFetchUnits = 0;
+    const emitCityProgress = (stage, message, phaseProgress) => {
+        emitProgress(progressContext, {
+            stage,
+            message,
+            totalCities: progressContext.totalCities,
+            cityIndex: progressContext.cityIndex,
+            completedCities: progressContext.completedCities,
+            citySlug: config.slug,
+            city: config.city,
+            progressFraction: (progressContext.completedCities + clampProgressFraction(phaseProgress)) /
+                Math.max(progressContext.totalCities, 1),
+        });
+    };
+    const emitFetchProgress = (message) => {
+        const fetchPhaseProgress = totalFetchUnits === 0 ? 0.6 : 0.1 + (completedFetchUnits / totalFetchUnits) * 0.5;
+        emitCityProgress("fetching", message, fetchPhaseProgress);
+    };
+    emitCityProgress("fetching", `${config.city}: fetching WU, AW, and Polymarket history`, 0.05);
     const [wuRows, awRows, polymarketRows] = await Promise.all([
-        fetchWundergroundObservationRowsForCity(config, startDate, endDate, fetchedAt),
-        fetchAviationObservationRowsForCity(config, startDate, endDate, fetchedAt),
-        fetchPolymarketDayRowsForCity(config, startDate, endDate, fetchedAt),
+        fetchWundergroundObservationRowsForCity(config, startDate, endDate, fetchedAt, {
+            onWindowComplete: (window, index, total) => {
+                completedFetchUnits += 1;
+                emitFetchProgress(`${config.city}: fetched WU window ${window.startDate}..${window.endDate} (${index}/${total})`);
+            },
+        }),
+        fetchAviationObservationRowsForCity(config, startDate, endDate, fetchedAt, {
+            onWindowComplete: (window, index, total) => {
+                completedFetchUnits += 1;
+                emitFetchProgress(`${config.city}: fetched AW window ${window.startDate}..${window.endDate} (${index}/${total})`);
+            },
+        }),
+        fetchPolymarketDayRowsForCity(config, startDate, endDate, fetchedAt, {
+            onComplete: (daysFetched) => {
+                completedFetchUnits += 1;
+                emitFetchProgress(`${config.city}: fetched Polymarket outcomes for ${daysFetched} day${daysFetched === 1 ? "" : "s"}`);
+            },
+        }),
     ]);
-    logProgress(`${config.city}: persisting ${wuRows.length} WU points, ${awRows.length} AW points, ${polymarketRows.length} market days`);
+    emitCityProgress("persisting", `${config.city}: persisting ${wuRows.length} WU points, ${awRows.length} AW points, ${polymarketRows.length} market days`, 0.72);
     await (0, db_1.deleteWundergroundObservationWindow)({
         citySlug: config.slug,
         startDate,
@@ -485,8 +543,9 @@ async function syncComparisonCity(config, startDate, endDate) {
     const wuObservationPointsUpserted = await (0, db_1.upsertWundergroundObservations)(wuRows);
     const awObservationPointsUpserted = await (0, db_1.upsertAviationObservations)(awRows);
     const polymarketDaysUpserted = await (0, db_1.upsertPolymarketDays)(polymarketRows);
+    emitCityProgress("rebuilding-future-high-stats", `${config.city}: rebuilding WU future-high hourly buckets`, 0.88);
     const futureHighStatsResult = await (0, future_high_stats_1.rebuildWundergroundFutureHighHourlyStatsForCity)(config.slug);
-    logProgress(`${config.city}: rebuilt ${futureHighStatsResult.recordsWritten} WU future-high hourly buckets`);
+    emitCityProgress("rebuilding-future-high-stats", `${config.city}: rebuilt ${futureHighStatsResult.recordsWritten} WU future-high hourly buckets`, 0.98);
     return {
         wuObservationPointsUpserted,
         awObservationPointsUpserted,
@@ -494,7 +553,7 @@ async function syncComparisonCity(config, startDate, endDate) {
         futureHighStatBucketsWritten: futureHighStatsResult.recordsWritten,
     };
 }
-async function runComparisonSync(params) {
+async function runComparisonSync(params, options = {}) {
     const configs = resolveComparisonCityConfigs(params.cityFilter);
     const summary = {
         generatedAt: new Date().toISOString(),
@@ -508,13 +567,41 @@ async function runComparisonSync(params) {
         awObservationPointsUpserted: 0,
         futureHighStatBucketsWritten: 0,
     };
-    for (const config of configs) {
-        const result = await syncComparisonCity(config, params.startDate, params.endDate);
+    emitProgress(options, {
+        stage: "starting",
+        message: `Starting comparison sync for ${summary.startDate}..${summary.endDate}` +
+            `${summary.cityFilter ? ` city=${summary.cityFilter}` : ""}` +
+            ` across ${configs.length} ${configs.length === 1 ? "city" : "cities"}`,
+        totalCities: configs.length,
+        cityIndex: null,
+        completedCities: 0,
+        citySlug: null,
+        city: null,
+        progressFraction: 0,
+    });
+    for (const [index, config] of configs.entries()) {
+        const result = await syncComparisonCity(config, params.startDate, params.endDate, {
+            totalCities: configs.length,
+            cityIndex: index + 1,
+            completedCities: index,
+            onProgress: options.onProgress,
+        });
         summary.polymarketDaysUpserted += result.polymarketDaysUpserted;
         summary.wuObservationPointsUpserted += result.wuObservationPointsUpserted;
         summary.awObservationPointsUpserted += result.awObservationPointsUpserted;
         summary.futureHighStatBucketsWritten += result.futureHighStatBucketsWritten;
     }
+    emitProgress(options, {
+        stage: "completed",
+        message: `Saved raw comparison data ${summary.startDate}..${summary.endDate}` +
+            `${summary.cityFilter ? ` city=${summary.cityFilter}` : ""}`,
+        totalCities: configs.length,
+        cityIndex: null,
+        completedCities: configs.length,
+        citySlug: null,
+        city: null,
+        progressFraction: 1,
+    });
     return summary;
 }
 function renderComparisonSyncSummary(summary) {

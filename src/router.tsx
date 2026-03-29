@@ -1,20 +1,30 @@
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
-import { ComparisonPage, comparisonLoader } from "./routes/comparison-page";
 import { ErrorPage } from "./routes/error-page";
-import { HomePage } from "./routes/home-page";
 
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <HomePage />,
-    errorElement: <ErrorPage />,
+    ErrorBoundary: ErrorPage,
+    lazy: async () => {
+      const { HomePage } = await import("./routes/home-page");
+
+      return {
+        Component: HomePage,
+      };
+    },
   },
   {
     path: "/comparison",
-    loader: comparisonLoader,
-    element: <ComparisonPage />,
-    errorElement: <ErrorPage />,
+    ErrorBoundary: ErrorPage,
+    lazy: async () => {
+      const { ComparisonPage, comparisonLoader } = await import("./routes/comparison-page");
+
+      return {
+        loader: comparisonLoader,
+        Component: ComparisonPage,
+      };
+    },
   },
 ]);
 

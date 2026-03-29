@@ -7,8 +7,8 @@ import {
   formatDateInTimezone,
   resolveComparisonCityConfigs,
   runComparisonSync,
-  type ComparisonSyncSummary,
 } from "../lib/comparison/sync";
+import type { ComparisonSyncSummary } from "../lib/comparison/types";
 
 type CliArgs = {
   city: string | null;

@@ -30,6 +30,12 @@ Optional persistence variables for `/comparison`:
 - `TURSO_DATABASE_URL`
 - `TURSO_AUTH_TOKEN`
 
+Optional access control:
+
+- `BASIC_AUTH_USERNAME`
+- `BASIC_AUTH_PASSWORD`
+  - If both are set, the entire app and all `/api/*` routes are protected with HTTP Basic Auth.
+
 ## Behavior
 
 - Browser never calls upstream weather sources directly.
