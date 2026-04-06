@@ -26,6 +26,15 @@ type BasicAuthConfig = {
   password: string;
 };
 
+function isBasicAuthEnabledForCurrentEnvironment() {
+  if (process.env.NODE_ENV === "production") {
+    return true;
+  }
+
+  const developmentFlag = process.env.BASIC_AUTH_IN_DEVELOPMENT?.trim().toLowerCase();
+  return developmentFlag === "true" || developmentFlag === "1";
+}
+
 function serializeForInlineScript(value: unknown) {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")
@@ -42,6 +51,10 @@ function injectBeforeBodyEnd(html: string, snippet: string) {
 }
 
 function getBasicAuthConfig(): BasicAuthConfig | null {
+  if (!isBasicAuthEnabledForCurrentEnvironment()) {
+    return null;
+  }
+
   const username = process.env.BASIC_AUTH_USERNAME?.trim() ?? "";
   const password = process.env.BASIC_AUTH_PASSWORD?.trim() ?? "";
 

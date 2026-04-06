@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
-import { startTransition, useEffect, useEffectEvent, useRef, useState } from "react";
+import { startTransition, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { CSSProperties, RefObject } from "react";
 
 import { AIRPORTS } from "../../lib/airports";
 import { buildComparisonHref } from "../../lib/comparison/query";
@@ -125,6 +127,17 @@ const EMPTY_WEATHER_SUMMARY_SIGNALS: WeatherSummarySignals = {
   error: null,
 };
 
+type LaterHighDeltaDetailPopoverState = {
+  key: string;
+  rowLabel: string;
+  seriesLabel: string;
+  samples: Array<{
+    localDate: string;
+    peakLocalTime: string;
+  }>;
+  anchorElement: HTMLElement;
+};
+
 function formatTemperature(reading: SourceReading, displayUnit: TemperatureUnit) {
   if (typeof reading.value !== "number" || !reading.unit) {
     return "—";
@@ -156,6 +169,22 @@ function formatRawTemperature(value: number | null, unit: TemperatureUnit) {
   return `${hasFraction ? value.toFixed(1) : value.toFixed(0)}°C`;
 }
 
+function formatDeltaTemperature(delta: number, unit: TemperatureUnit | null) {
+  if (!unit) {
+    return `+${delta}`;
+  }
+
+  return `+${delta}°${unit}`;
+}
+
+function formatDayCount(value: number) {
+  return `${value} day${value === 1 ? "" : "s"}`;
+}
+
+function formatCompactDayCount(value: number) {
+  return `${value}d`;
+}
+
 function formatObservedAt(value: string | null, timezone: string) {
   if (!value) {
     return "—";
@@ -176,6 +205,16 @@ function formatForecastDate(value: string | null) {
     return "—";
   }
 
+  const [year, month, day] = value.split("-").map(Number);
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    month: "short",
+    day: "2-digit",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function formatMonthDay(value: string) {
   const [year, month, day] = value.split("-").map(Number);
 
   return new Intl.DateTimeFormat("en-GB", {
@@ -1042,25 +1081,414 @@ function ObservedTemperatureChart({
   );
 }
 
+function LaterHighDeltaPopover({
+  breakdown,
+  popoverId,
+  popoverRef,
+  style,
+}: {
+  breakdown: WeatherCard["laterHighDeltaBreakdown"];
+  popoverId?: string;
+  popoverRef?: RefObject<HTMLDivElement | null>;
+  style?: CSSProperties;
+}) {
+  const detailPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [detailPopover, setDetailPopover] = useState<LaterHighDeltaDetailPopoverState | null>(null);
+  const [detailPopoverPosition, setDetailPopoverPosition] = useState<{ top: number; left: number } | null>(null);
+  const unit = breakdown.displayUnit;
+  const basisLabel =
+    breakdown.cutoffLocalTime
+      ? `Cutoff ${breakdown.cutoffLocalTime} from AW now`
+      : "AW now context unavailable";
+  const toggleDetailPopover = useEffectEvent(
+    (
+      nextKey: string,
+      rowLabel: string,
+      seriesLabel: string,
+      samples: LaterHighDeltaDetailPopoverState["samples"],
+      anchorElement: HTMLElement,
+    ) => {
+      setDetailPopover((currentValue) => {
+        if (currentValue?.key === nextKey) {
+          setDetailPopoverPosition(null);
+          return null;
+        }
+
+        setDetailPopoverPosition(null);
+        return {
+          key: nextKey,
+          rowLabel,
+          seriesLabel,
+          samples,
+          anchorElement,
+        };
+      });
+    },
+  );
+
+  useEffect(() => {
+    setDetailPopover(null);
+    setDetailPopoverPosition(null);
+  }, [breakdown.generatedAt, breakdown.cutoffLocalTime]);
+
+  useEffect(() => {
+    if (!detailPopover || !detailPopoverRef.current) {
+      return;
+    }
+
+    const currentDetailPopover = detailPopover;
+
+    function updateDetailPopoverPosition() {
+      if (!currentDetailPopover.anchorElement.isConnected || !detailPopoverRef.current) {
+        setDetailPopover(null);
+        setDetailPopoverPosition(null);
+        return;
+      }
+
+      const anchorRect = currentDetailPopover.anchorElement.getBoundingClientRect();
+      const popoverRect = detailPopoverRef.current.getBoundingClientRect();
+      const viewportPadding = 12;
+      const desiredGap = 8;
+      let top = anchorRect.bottom + desiredGap;
+
+      if (top + popoverRect.height > window.innerHeight - viewportPadding) {
+        top = anchorRect.top - popoverRect.height - desiredGap;
+      }
+
+      let left = anchorRect.right - popoverRect.width;
+
+      if (left + popoverRect.width > window.innerWidth - viewportPadding) {
+        left = window.innerWidth - popoverRect.width - viewportPadding;
+      }
+
+      if (left < viewportPadding) {
+        left = viewportPadding;
+      }
+
+      if (top < viewportPadding) {
+        top = viewportPadding;
+      }
+
+      if (top + popoverRect.height > window.innerHeight - viewportPadding) {
+        top = Math.max(
+          viewportPadding,
+          window.innerHeight - popoverRect.height - viewportPadding,
+        );
+      }
+
+      setDetailPopoverPosition({ top, left });
+    }
+
+    updateDetailPopoverPosition();
+    window.addEventListener("resize", updateDetailPopoverPosition);
+    window.addEventListener("scroll", updateDetailPopoverPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateDetailPopoverPosition);
+      window.removeEventListener("scroll", updateDetailPopoverPosition, true);
+    };
+  }, [detailPopover]);
+  useEffect(() => {
+    if (!detailPopover) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (popoverRef?.current?.contains(target) || detailPopoverRef.current?.contains(target)) {
+        return;
+      }
+
+      setDetailPopover(null);
+      setDetailPopoverPosition(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDetailPopover(null);
+        setDetailPopoverPosition(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [detailPopover, popoverRef]);
+
+  let emptyMessage =
+    breakdown.status === "error" ||
+    (breakdown.status === "missing" && breakdown.cutoffLocalTime === null)
+      ? breakdown.error?.trim() ?? null
+      : null;
+  if (!emptyMessage) {
+    if (breakdown.historyDayCount === 0) {
+      emptyMessage = "No stored WU history is available yet for this city.";
+    } else if (breakdown.basisDayCount === 0) {
+      emptyMessage = breakdown.cutoffLocalTime
+        ? `No stored WU observation close enough to ${breakdown.cutoffLocalTime} to use as a basis.`
+        : "No stored WU observation is available near the AW now cutoff time.";
+    } else if (breakdown.laterObservationDayCount === 0) {
+      emptyMessage = breakdown.cutoffLocalTime
+        ? `No stored WU observations occur after ${breakdown.cutoffLocalTime}.`
+        : "No stored WU observations occur after the current AW now cutoff time.";
+    }
+  }
+
+  const allTimeBucketMap = new Map(
+    breakdown.allTime.buckets.map((bucket) => [bucket.delta, bucket]),
+  );
+  const recent10BucketMap = new Map(
+    breakdown.recent10.buckets.map((bucket) => [bucket.delta, bucket]),
+  );
+  const deltaSet = new Set<number>([0]);
+  for (const bucket of breakdown.allTime.buckets) {
+    deltaSet.add(bucket.delta);
+  }
+  for (const bucket of breakdown.recent10.buckets) {
+    deltaSet.add(bucket.delta);
+  }
+
+  const rows = breakdown.laterObservationDayCount > 0
+    ? [...deltaSet]
+        .sort((left, right) => left - right)
+        .map((delta) => {
+          const allTimeBucket = delta > 0 ? allTimeBucketMap.get(delta) ?? null : null;
+          const recent10Bucket = delta > 0 ? recent10BucketMap.get(delta) ?? null : null;
+          const allTimeCount =
+            delta === 0
+              ? breakdown.allTime.noHigherPeakDayCount
+              : allTimeBucket?.count ?? 0;
+          const recent10Count =
+            delta === 0
+              ? breakdown.recent10.noHigherPeakDayCount
+              : recent10Bucket?.count ?? 0;
+
+          return {
+            key: delta === 0 ? "no-lift" : String(delta),
+            label: delta === 0 ? "No lift" : formatDeltaTemperature(delta, unit),
+            allTime: {
+              count: allTimeCount,
+              probability:
+                breakdown.allTime.sampleDayCount > 0
+                  ? allTimeCount / breakdown.allTime.sampleDayCount
+                  : 0,
+              sampleDayCount: breakdown.allTime.sampleDayCount,
+              samples:
+                delta === 0
+                  ? breakdown.allTime.noHigherPeakSamples
+                  : allTimeBucket?.samples ?? [],
+            },
+            recent10: {
+              count: recent10Count,
+              probability:
+                breakdown.recent10.sampleDayCount > 0
+                  ? recent10Count / breakdown.recent10.sampleDayCount
+                  : 0,
+              sampleDayCount: breakdown.recent10.sampleDayCount,
+              samples:
+                delta === 0
+                  ? breakdown.recent10.noHigherPeakSamples
+                  : recent10Bucket?.samples ?? [],
+            },
+          };
+        })
+    : [];
+
+  return (
+    <div
+      className="later-high-delta-popover"
+      id={popoverId}
+      role="dialog"
+      aria-label="Later WU peak delta breakdown"
+      ref={popoverRef}
+      style={style}
+    >
+      <div className="later-high-delta-header">
+        <p>WU Jumps After Cutoff</p>
+        <span>{basisLabel}</span>
+      </div>
+      <div className="later-high-delta-meta">
+        <span>Stored days {breakdown.historyDayCount}</span>
+        <span>WU basis days {breakdown.basisDayCount}</span>
+        <span>Later WU obs {breakdown.laterObservationDayCount}</span>
+      </div>
+      <div className="later-high-delta-legend" aria-hidden="true">
+        <span className="later-high-delta-legend-item is-all">
+          <span className="later-high-delta-legend-swatch" />
+          All history
+        </span>
+        <span className="later-high-delta-legend-item is-recent">
+          <span className="later-high-delta-legend-swatch" />
+          Recent 10 valid
+        </span>
+      </div>
+
+      {emptyMessage ? (
+        <p className="later-high-delta-empty">{emptyMessage}</p>
+      ) : (
+        <div className="later-high-delta-list" role="list">
+          {rows.map((row) => {
+            const seriesItems = [
+              {
+                key: "all" as const,
+                label: "All history",
+                className: "is-all",
+                value: row.allTime,
+              },
+              {
+                key: "recent" as const,
+                label: "Recent 10 valid",
+                className: "is-recent",
+                value: row.recent10,
+              },
+            ];
+
+            return (
+              <div className="later-high-delta-row" role="listitem" key={row.key}>
+                <span className="later-high-delta-label">{row.label}</span>
+                <div className="later-high-delta-bar-stack" aria-hidden="true">
+                  <div className="later-high-delta-bar-track is-all">
+                    <div
+                      className="later-high-delta-bar-fill is-all"
+                      style={{ width: `${row.allTime.probability * 100}%` }}
+                    />
+                  </div>
+                  <div className="later-high-delta-bar-track is-recent">
+                    <div
+                      className="later-high-delta-bar-fill is-recent"
+                      style={{ width: `${row.recent10.probability * 100}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="later-high-delta-series-stats">
+                  {seriesItems.map((series) => {
+                    const detailKey = `${row.key}:${series.key}`;
+
+                    return (
+                      <div className="later-high-delta-series-slot" key={series.key}>
+                        <button
+                          aria-expanded={detailPopover?.key === detailKey}
+                          aria-label={`Show ${series.label.toLowerCase()} dates for ${row.label}`}
+                          className={`later-high-delta-series-button ${series.className}`}
+                          onClick={(event) => {
+                            toggleDetailPopover(
+                              detailKey,
+                              row.label,
+                              series.label,
+                              series.value.samples,
+                              event.currentTarget,
+                            );
+                          }}
+                          title={`${series.label}: ${formatDayCount(series.value.count)}`}
+                          type="button"
+                        >
+                          <span className={`later-high-delta-series-count ${series.className}`}>
+                            {formatCompactDayCount(series.value.count)}
+                          </span>
+                          <strong className={`later-high-delta-series-probability ${series.className}`}>
+                            {series.value.sampleDayCount > 0
+                            ? formatProbabilityPercent(series.value.probability)
+                            : "—"}
+                        </strong>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {breakdown.status === "stale" && breakdown.error ? (
+        <p className="later-high-delta-note">{breakdown.error}</p>
+      ) : null}
+      {detailPopover && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="later-high-delta-detail-popover"
+              role="tooltip"
+              aria-label={`${detailPopover.seriesLabel} dates for ${detailPopover.rowLabel}`}
+              ref={detailPopoverRef}
+              style={
+                detailPopoverPosition
+                  ? {
+                      top: `${detailPopoverPosition.top}px`,
+                      left: `${detailPopoverPosition.left}px`,
+                    }
+                  : {
+                      top: "-9999px",
+                      left: "-9999px",
+                      visibility: "hidden",
+                    }
+              }
+            >
+              <div className="later-high-delta-detail-header">
+                <strong>{detailPopover.rowLabel}</strong>
+                <span>{detailPopover.seriesLabel}</span>
+              </div>
+              {detailPopover.samples.length > 0 ? (
+                <div className="later-high-delta-detail-list" role="list">
+                  {detailPopover.samples.map((sample) => (
+                    <div
+                      className="later-high-delta-detail-item"
+                      role="listitem"
+                      key={`${detailPopover.key}:${sample.localDate}:${sample.peakLocalTime}`}
+                    >
+                      <span>{formatMonthDay(sample.localDate)}</span>
+                      <strong>{sample.peakLocalTime}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="later-high-delta-detail-empty">
+                  No matching valid days.
+                </p>
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
+}
+
 function HistoryBasedLaterHighPanel({
   curve,
+  breakdown,
   comparisonHref,
   now,
   timezone,
 }: {
   curve: WeatherCard["historyBasedLaterHigh"];
+  breakdown: WeatherCard["laterHighDeltaBreakdown"];
   comparisonHref: string | null;
   now: Date;
   timezone: string;
 }) {
   const currentHour = Math.floor(getLocalClockMinutes(now, timezone) / 60);
+  const popoverId = useId();
+  const panelRef = useRef<HTMLElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const breakdownPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [isBreakdownOpen, setIsBreakdownOpen] = useState(false);
+  const [breakdownPopoverPosition, setBreakdownPopoverPosition] = useState<{ top: number; left: number } | null>(null);
   const currentBucket = curve.buckets.find((bucket) => bucket.hour === currentHour) ?? null;
   const primaryLabel =
     currentBucket && curve.status !== "error" && curve.status !== "missing"
       ? formatProbabilityPercent(currentBucket.probability)
       : "—";
   const coverageLabel = currentBucket
-    ? `${currentBucket.sampleCount}/${currentBucket.eligibleDayCount} days`
+    ? `${currentBucket.futureHigherCount}/${currentBucket.sampleCount} days`
     : "No current-hour bucket";
   const className =
     curve.status === "error" || curve.status === "missing"
@@ -1068,34 +1496,211 @@ function HistoryBasedLaterHighPanel({
       : curve.status === "stale"
         ? "history-probability-panel is-stale"
         : "history-probability-panel";
+  const closeBreakdown = useEffectEvent(() => {
+    setIsBreakdownOpen(false);
+    setBreakdownPopoverPosition(null);
+  });
+  const toggleBreakdown = useEffectEvent(() => {
+    setIsBreakdownOpen((currentValue) => !currentValue);
+  });
+  useEffect(() => {
+    setIsBreakdownOpen(false);
+  }, [breakdown.generatedAt, breakdown.cutoffLocalTime]);
+  useEffect(() => {
+    if (!isBreakdownOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (
+        !(target instanceof Node) ||
+        panelRef.current?.contains(target) ||
+        breakdownPopoverRef.current?.contains(target) ||
+        (target instanceof Element && target.closest(".later-high-delta-detail-popover"))
+      ) {
+        return;
+      }
+
+      closeBreakdown();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeBreakdown();
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeBreakdown, isBreakdownOpen]);
+  useEffect(() => {
+    if (!isBreakdownOpen || !triggerRef.current || !breakdownPopoverRef.current) {
+      return;
+    }
+
+    function updateBreakdownPopoverPosition() {
+      if (!triggerRef.current || !breakdownPopoverRef.current) {
+        return;
+      }
+
+      const anchorRect = triggerRef.current.getBoundingClientRect();
+      const popoverRect = breakdownPopoverRef.current.getBoundingClientRect();
+      const viewportPadding = 12;
+      const desiredGap = 10;
+      let top = anchorRect.bottom + desiredGap;
+
+      if (top + popoverRect.height > window.innerHeight - viewportPadding) {
+        top = anchorRect.top - popoverRect.height - desiredGap;
+      }
+
+      let left = anchorRect.right - popoverRect.width;
+
+      if (left + popoverRect.width > window.innerWidth - viewportPadding) {
+        left = window.innerWidth - popoverRect.width - viewportPadding;
+      }
+
+      if (left < viewportPadding) {
+        left = viewportPadding;
+      }
+
+      if (top < viewportPadding) {
+        top = viewportPadding;
+      }
+
+      if (top + popoverRect.height > window.innerHeight - viewportPadding) {
+        top = Math.max(
+          viewportPadding,
+          window.innerHeight - popoverRect.height - viewportPadding,
+        );
+      }
+
+      setBreakdownPopoverPosition({ top, left });
+    }
+
+    updateBreakdownPopoverPosition();
+    window.addEventListener("resize", updateBreakdownPopoverPosition);
+    window.addEventListener("scroll", updateBreakdownPopoverPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateBreakdownPopoverPosition);
+      window.removeEventListener("scroll", updateBreakdownPopoverPosition, true);
+    };
+  }, [breakdown.cutoffLocalTime, breakdown.generatedAt, isBreakdownOpen]);
+
   const content = (
     <div className="history-probability-copy">
       <div className="history-probability-heading">
-        <p>Later high odds</p>
+        <p>Later High</p>
         <span>{coverageLabel}</span>
       </div>
       <strong>{primaryLabel}</strong>
     </div>
   );
 
-  if (comparisonHref) {
-    return (
-      <Link
-        className={`${className} is-link`}
-        to={comparisonHref}
-        target="_blank"
-        rel="noreferrer"
-        aria-label="Open comparison for recent resolved days"
-      >
-        {content}
-      </Link>
-    );
-  }
-
   return (
-    <section className={className} aria-label="History-based later high probability">
-      {content}
-    </section>
+    <>
+      <section
+        className={`${className} has-breakdown${isBreakdownOpen ? " is-breakdown-open" : ""}`}
+        aria-label="History-based later high probability"
+        ref={panelRef}
+      >
+        <div className="history-probability-shell">
+          {comparisonHref ? (
+            <Link
+              className="history-probability-main-link"
+              to={comparisonHref}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open comparison for recent resolved days"
+            >
+              {content}
+            </Link>
+          ) : (
+            <div className="history-probability-main">
+              {content}
+            </div>
+          )}
+          <button
+            aria-controls={popoverId}
+            aria-expanded={isBreakdownOpen}
+            aria-label="Open WU jump breakdown"
+            className={`history-probability-breakdown-trigger is-${breakdown.status}`}
+            onClick={() => toggleBreakdown()}
+            ref={triggerRef}
+            type="button"
+          >
+            <span className="visually-hidden">Open WU jump breakdown</span>
+            <svg
+              aria-hidden="true"
+              className="history-probability-breakdown-icon"
+              viewBox="0 0 20 20"
+              fill="none"
+            >
+              <path
+                d="M3 16.25H17"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeWidth="1.5"
+              />
+              <path
+                d="M5.25 14V10.75"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeWidth="1.75"
+              />
+              <path
+                d="M10 14V7.75"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeWidth="1.75"
+              />
+              <path
+                d="M14.75 14V5.25"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeWidth="1.75"
+              />
+              <path
+                d="M4.5 7.5L8.4 5.15L11.2 6.55L15.5 3.75"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.35"
+              />
+            </svg>
+          </button>
+        </div>
+      </section>
+
+      {isBreakdownOpen && typeof document !== "undefined"
+        ? createPortal(
+            <LaterHighDeltaPopover
+              breakdown={breakdown}
+              popoverId={popoverId}
+              popoverRef={breakdownPopoverRef}
+              style={
+                breakdownPopoverPosition
+                  ? {
+                      top: `${breakdownPopoverPosition.top}px`,
+                      left: `${breakdownPopoverPosition.left}px`,
+                    }
+                  : {
+                      top: "-9999px",
+                      left: "-9999px",
+                      visibility: "hidden",
+                    }
+              }
+            />,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
@@ -1146,7 +1751,7 @@ function buildCardComparisonHref(card: WeatherCard) {
 
   return buildComparisonHref({
     city: card.airport.slug,
-    startDate: shiftIsoDate(endDate, -6),
+    startDate: shiftIsoDate(endDate, -8),
     endDate,
     selectedDate: endDate,
   });
@@ -1276,6 +1881,34 @@ function WeatherCardTrendDetails({
     status: "missing" as const,
     error: null,
   };
+  const laterHighDeltaBreakdown = card.laterHighDeltaBreakdown ?? {
+    generatedAt: null,
+    method: null,
+    cutoffLocalTime: null,
+    displayUnit: null,
+    historyDayCount: 0,
+    basisDayCount: 0,
+    laterObservationDayCount: 0,
+    recentValidDayCount: 0,
+    allTime: {
+      sampleDayCount: 0,
+      noHigherPeakDayCount: 0,
+      noHigherPeakSamples: [],
+      positiveDeltaDayCount: 0,
+      maxDelta: null,
+      buckets: [],
+    },
+    recent10: {
+      sampleDayCount: 0,
+      noHigherPeakDayCount: 0,
+      noHigherPeakSamples: [],
+      positiveDeltaDayCount: 0,
+      maxDelta: null,
+      buckets: [],
+    },
+    status: "missing" as const,
+    error: null,
+  };
 
   return (
     <>
@@ -1288,6 +1921,7 @@ function WeatherCardTrendDetails({
 
       <HistoryBasedLaterHighPanel
         curve={historyBasedLaterHigh}
+        breakdown={laterHighDeltaBreakdown}
         comparisonHref={comparisonHref}
         now={now}
         timezone={card.airport.timezone}
@@ -1503,22 +2137,9 @@ function WeatherCardView({
               href={resolvedMarketUrl}
               target="_blank"
               rel="noreferrer"
+              aria-label={`${card.airport.city} market (${card.airport.stationIcao})`}
             >
               <p className="card-city">{card.airport.city}</p>
-            </a>
-            <a
-              className="card-icao-link card-icao-wrap"
-              href={resolvedMarketUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={`${card.airport.city} Polymarket market`}
-            >
-              <span className="card-icao-label" aria-label={card.airport.airportName}>
-                {card.airport.stationIcao}
-              </span>
-              <div className="card-icao-tip" role="tooltip">
-                {card.airport.airportName}
-              </div>
             </a>
           </div>
           <div className="card-title-actions">
@@ -1568,7 +2189,7 @@ function WeatherCardView({
         <section className="history-probability-panel" aria-label="History-based later high probability">
           <div className="history-probability-copy">
             <div className="history-probability-heading">
-              <p>Later high odds</p>
+              <p>Later High</p>
               <span>{detailStatus ?? "Loading details…"}</span>
             </div>
             <strong>—</strong>
@@ -1602,14 +2223,13 @@ function WeatherCardView({
   );
 }
 
-function SkeletonCard({ city, stationIcao }: { city: string; stationIcao: string }) {
+function SkeletonCard({ city }: { city: string }) {
   return (
     <article className="weather-card card-skeleton">
       <div className="card-topline" />
       <header className="card-header">
         <div className="card-title-row">
           <p className="card-city">{city}</p>
-          <h2>{stationIcao}</h2>
         </div>
       </header>
       <div className="card-skeleton-line card-skeleton-wide" />
@@ -1879,7 +2499,6 @@ export function WeatherDashboard() {
             <SkeletonCard
               key={airport.slug}
               city={airport.city}
-              stationIcao={airport.stationIcao}
             />
           );
         })}

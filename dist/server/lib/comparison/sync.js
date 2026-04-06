@@ -4,13 +4,16 @@ exports.shiftDate = shiftDate;
 exports.formatDateInTimezone = formatDateInTimezone;
 exports.todayInTimezone = todayInTimezone;
 exports.resolveComparisonCityConfigs = resolveComparisonCityConfigs;
+exports.createComparisonCurrentDaySyncPlan = createComparisonCurrentDaySyncPlan;
 exports.runComparisonSync = runComparisonSync;
+exports.runComparisonCurrentDaySync = runComparisonCurrentDaySync;
 exports.renderComparisonSyncSummary = renderComparisonSyncSummary;
 const node_child_process_1 = require("node:child_process");
 const node_util_1 = require("node:util");
 const airports_1 = require("../airports");
 const db_1 = require("./db");
 const future_high_stats_1 = require("./future-high-stats");
+const history_coverage_1 = require("./history-coverage");
 const AVIATION_WEATHER_BASE_URL = "https://aviationweather.gov/api/data/metar";
 const POLYMARKET_EVENT_BY_SLUG_URL = "https://gamma-api.polymarket.com/events/slug";
 const WEATHER_COM_HISTORY_BASE_URL = "https://api.weather.com/v1";
@@ -132,6 +135,74 @@ function resolveComparisonCityConfigs(cityFilter) {
         throw new Error(`No city matched --city ${cityFilter}`);
     }
     return configs;
+}
+function describeWindow(startDate, endDate, cityFilter) {
+    return `${startDate}..${endDate}${cityFilter ? ` city=${cityFilter}` : ""}`;
+}
+function getMinDate(values) {
+    const sorted = [...values].sort((left, right) => left.localeCompare(right));
+    const earliest = sorted[0];
+    if (!earliest) {
+        throw new Error("Expected at least one comparison sync date");
+    }
+    return earliest;
+}
+function getMaxDate(values) {
+    const sorted = [...values].sort((left, right) => right.localeCompare(left));
+    const latest = sorted[0];
+    if (!latest) {
+        throw new Error("Expected at least one comparison sync date");
+    }
+    return latest;
+}
+function describeCurrentDaySyncTarget(target) {
+    return target.startReason === "latest-stored-day"
+        ? `${target.startDate}..${target.endDate} · ${target.config.slug} (resume from latest stored day)`
+        : `${target.startDate}..${target.endDate} · ${target.config.slug} (earliest resolved day -> current local day)`;
+}
+function buildCurrentDaySyncScopeLabel(targets) {
+    if (targets.length === 1) {
+        const [target] = targets;
+        return describeCurrentDaySyncTarget(target);
+    }
+    const latestStoredTargetCount = targets.filter((target) => target.startReason === "latest-stored-day").length;
+    if (latestStoredTargetCount === targets.length) {
+        return "Per-city latest stored day..current local day · all cities";
+    }
+    if (latestStoredTargetCount === 0) {
+        return "Per-city earliest resolved day..current local day · all cities";
+    }
+    return "Per-city latest stored day or earliest resolved day..current local day · all cities";
+}
+async function createComparisonCurrentDaySyncPlan(cityFilter) {
+    const normalizedCityFilter = cityFilter?.trim() || null;
+    const configs = resolveComparisonCityConfigs(normalizedCityFilter);
+    const targets = await Promise.all(configs.map(async (config) => {
+        const earliestResolvedDate = (0, history_coverage_1.getEarliestResolvedComparisonDay)(config.slug);
+        if (!earliestResolvedDate) {
+            throw new Error(`Missing earliest resolved comparison day for city ${config.slug}`);
+        }
+        const latestStoredResumeDate = await (0, db_1.getLatestStoredComparisonResumeDate)(config.slug);
+        const startDate = latestStoredResumeDate ?? earliestResolvedDate;
+        const startReason = latestStoredResumeDate ? "latest-stored-day" : "earliest-resolved-day";
+        const endDate = formatDateInTimezone(new Date(), config.timezone);
+        if (startDate > endDate) {
+            throw new Error(`City ${config.slug} has resume date ${startDate} after current local date ${endDate}`);
+        }
+        return {
+            config,
+            startDate,
+            endDate,
+            startReason,
+        };
+    }));
+    return {
+        cityFilter: normalizedCityFilter,
+        targets,
+        startDate: getMinDate(targets.map((target) => target.startDate)),
+        endDate: getMaxDate(targets.map((target) => target.endDate)),
+        scopeLabel: buildCurrentDaySyncScopeLabel(targets),
+    };
 }
 async function fetchJson(url) {
     const target = url.toString();
@@ -560,6 +631,7 @@ async function runComparisonSync(params, options = {}) {
         startDate: params.startDate,
         endDate: params.endDate,
         cityFilter: params.cityFilter,
+        scopeLabel: null,
         databaseUrl: (0, db_1.getComparisonDatabaseUrl)(),
         citiesProcessed: configs.length,
         polymarketDaysUpserted: 0,
@@ -569,8 +641,7 @@ async function runComparisonSync(params, options = {}) {
     };
     emitProgress(options, {
         stage: "starting",
-        message: `Starting comparison sync for ${summary.startDate}..${summary.endDate}` +
-            `${summary.cityFilter ? ` city=${summary.cityFilter}` : ""}` +
+        message: `Starting comparison sync for ${describeWindow(summary.startDate, summary.endDate, summary.cityFilter)}` +
             ` across ${configs.length} ${configs.length === 1 ? "city" : "cities"}`,
         totalCities: configs.length,
         cityIndex: null,
@@ -593,8 +664,7 @@ async function runComparisonSync(params, options = {}) {
     }
     emitProgress(options, {
         stage: "completed",
-        message: `Saved raw comparison data ${summary.startDate}..${summary.endDate}` +
-            `${summary.cityFilter ? ` city=${summary.cityFilter}` : ""}`,
+        message: `Saved raw comparison data ${describeWindow(summary.startDate, summary.endDate, summary.cityFilter)}`,
         totalCities: configs.length,
         cityIndex: null,
         completedCities: configs.length,
@@ -604,9 +674,60 @@ async function runComparisonSync(params, options = {}) {
     });
     return summary;
 }
+async function runComparisonCurrentDaySync(plan, options = {}) {
+    const summary = {
+        generatedAt: new Date().toISOString(),
+        startDate: plan.startDate,
+        endDate: plan.endDate,
+        cityFilter: plan.cityFilter,
+        scopeLabel: plan.scopeLabel,
+        databaseUrl: (0, db_1.getComparisonDatabaseUrl)(),
+        citiesProcessed: plan.targets.length,
+        polymarketDaysUpserted: 0,
+        wuObservationPointsUpserted: 0,
+        awObservationPointsUpserted: 0,
+        futureHighStatBucketsWritten: 0,
+    };
+    emitProgress(options, {
+        stage: "starting",
+        message: `Starting comparison sync for ${plan.scopeLabel}`,
+        totalCities: plan.targets.length,
+        cityIndex: null,
+        completedCities: 0,
+        citySlug: null,
+        city: null,
+        progressFraction: 0,
+    });
+    for (const [index, target] of plan.targets.entries()) {
+        const result = await syncComparisonCity(target.config, target.startDate, target.endDate, {
+            totalCities: plan.targets.length,
+            cityIndex: index + 1,
+            completedCities: index,
+            onProgress: options.onProgress,
+        });
+        summary.polymarketDaysUpserted += result.polymarketDaysUpserted;
+        summary.wuObservationPointsUpserted += result.wuObservationPointsUpserted;
+        summary.awObservationPointsUpserted += result.awObservationPointsUpserted;
+        summary.futureHighStatBucketsWritten += result.futureHighStatBucketsWritten;
+    }
+    emitProgress(options, {
+        stage: "completed",
+        message: `Saved raw comparison data ${plan.scopeLabel}`,
+        totalCities: plan.targets.length,
+        cityIndex: null,
+        completedCities: plan.targets.length,
+        citySlug: null,
+        city: null,
+        progressFraction: 1,
+    });
+    return summary;
+}
 function renderComparisonSyncSummary(summary) {
     const lines = [];
-    lines.push(`Saved raw comparison data ${summary.startDate}..${summary.endDate}${summary.cityFilter ? ` city=${summary.cityFilter}` : ""}`);
+    lines.push(`Saved raw comparison data ${summary.scopeLabel ?? describeWindow(summary.startDate, summary.endDate, summary.cityFilter)}`);
+    if (summary.scopeLabel) {
+        lines.push(`Overall date span: ${describeWindow(summary.startDate, summary.endDate, summary.cityFilter)}`);
+    }
     lines.push(`Database: ${summary.databaseUrl}`);
     lines.push(`Cities processed: ${summary.citiesProcessed}`);
     lines.push(`Polymarket days upserted: ${summary.polymarketDaysUpserted}`);

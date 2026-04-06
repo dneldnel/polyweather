@@ -1,3 +1,4 @@
+import { AIRPORTS } from "../airports";
 import {
   ensureComparisonDb,
   getComparisonDbClient,
@@ -17,8 +18,36 @@ type FutureHighAggregationRow = {
   eligible_day_count: number;
 };
 
+const AIRPORTS_BY_SLUG = new Map(AIRPORTS.map((airport) => [airport.slug, airport]));
+
+function formatDateInTimezone(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  if (!year || !month || !day) {
+    throw new Error(`Could not format date in timezone ${timeZone}`);
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
 export async function rebuildWundergroundFutureHighHourlyStatsForCity(citySlug: string) {
   await ensureComparisonDb();
+  const airport = AIRPORTS_BY_SLUG.get(citySlug);
+
+  if (!airport) {
+    throw new Error(`Unknown airport slug for WU future-high rebuild: ${citySlug}`);
+  }
+
+  const currentLocalDate = formatDateInTimezone(new Date(), airport.timezone);
 
   const result = await getComparisonDbClient().execute({
     sql: `
@@ -30,6 +59,7 @@ export async function rebuildWundergroundFutureHighHourlyStatsForCity(citySlug: 
         FROM wu_observations
         WHERE city_slug = ?
           AND temp_c IS NOT NULL
+          AND local_date < ?
         GROUP BY city_slug, local_date
         HAVING COUNT(*) >= ?
       ),
@@ -73,7 +103,7 @@ export async function rebuildWundergroundFutureHighHourlyStatsForCity(citySlug: 
       GROUP BY hs.city_slug, hs.hour_bucket
       ORDER BY hs.hour_bucket
     `,
-    args: [citySlug, MIN_ELIGIBLE_WU_OBSERVATIONS_PER_DAY],
+    args: [citySlug, currentLocalDate, MIN_ELIGIBLE_WU_OBSERVATIONS_PER_DAY],
   });
 
   const generatedAt = new Date().toISOString();

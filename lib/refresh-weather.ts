@@ -4,6 +4,7 @@ import {
   getWundergroundFutureHighHourlyStats,
 } from "./comparison/db";
 import { splitHomepageRefreshAirports } from "./homepage-refresh-priority";
+import { createEmptyLaterHighDeltaBreakdown } from "./later-high-delta-breakdown";
 import {
   DEFAULT_SIGNAL_MODEL,
   getSignalModelsForAirport,
@@ -1091,6 +1092,7 @@ async function refreshCard(
     wuCurrent: wuCurrentReading,
     wuTodayHigh: wuTodayHighReading,
     historyBasedLaterHigh: historyBasedLaterHighCurve,
+    laterHighDeltaBreakdown: createEmptyLaterHighDeltaBreakdown(),
     aviationWeatherCurrent: aviationReading,
     aviationWeatherTrend: aviationTrend,
     defaultWeatherSignalsSourceId: DEFAULT_SIGNAL_MODEL.forecastModel,

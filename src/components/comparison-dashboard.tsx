@@ -18,6 +18,7 @@ import type {
   ComparisonDayDetail,
   ComparisonDayRecord,
   ComparisonSyncJobLookupResponse,
+  ComparisonSyncMode,
   ComparisonSyncJobSnapshot,
   ComparisonSyncJobStartResponse,
   ComparisonPolymarketDay,
@@ -86,7 +87,10 @@ function formatComparisonSyncStatus(status: ComparisonSyncJobSnapshot["status"])
 }
 
 function formatComparisonSyncScope(job: ComparisonSyncJobSnapshot) {
-  return `${job.startDate}..${job.endDate}${job.cityFilter ? ` · ${job.cityFilter}` : " · all cities"}`;
+  return (
+    job.scopeLabel ??
+    `${job.startDate}..${job.endDate}${job.cityFilter ? ` · ${job.cityFilter}` : " · all cities"}`
+  );
 }
 
 function formatComparisonSyncTimestamp(value: string | null) {
@@ -121,6 +125,16 @@ function formatComparisonSyncLogTimestamp(value: string) {
 
 function normalizeCityFilter(value: string | null | undefined) {
   return value?.trim() || null;
+}
+
+function doesSyncJobAffectReport(job: ComparisonSyncJobSnapshot, report: ComparisonReport) {
+  const normalizedJobCity = normalizeCityFilter(job.cityFilter);
+  const normalizedReportCity = normalizeCityFilter(report.cityFilter);
+  const citiesOverlap =
+    !normalizedJobCity || !normalizedReportCity || normalizedJobCity === normalizedReportCity;
+  const windowsOverlap = job.startDate <= report.endDate && report.startDate <= job.endDate;
+
+  return citiesOverlap && windowsOverlap;
 }
 
 function formatNumber(value: number | null) {
@@ -692,16 +706,22 @@ function ComparisonDayDetailPanel({
 function ComparisonSyncPanel({
   job,
   requestError,
-  isStartingSync,
+  startingSyncAction,
   isPageLoading,
+  activeCityLabel,
+  activeCitySlug,
   onRunSync,
+  onRunSyncAll,
   statusLabel,
 }: {
   job: ComparisonSyncJobSnapshot | null;
   requestError: string | null;
-  isStartingSync: boolean;
+  startingSyncAction: "city" | "all" | null;
   isPageLoading: boolean;
+  activeCityLabel: string | null;
+  activeCitySlug: string | null;
   onRunSync: () => void;
+  onRunSyncAll: () => void;
   statusLabel?: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(() => !job || job.status === "running");
@@ -713,7 +733,19 @@ function ComparisonSyncPanel({
     status: job?.status ?? null,
   });
   const isSyncRunning = job?.status === "running";
-  const buttonLabel = isStartingSync ? "Starting…" : isSyncRunning ? "Syncing…" : "Run sync";
+  const isStartingSync = startingSyncAction !== null;
+  const normalizedActiveCitySlug = normalizeCityFilter(activeCitySlug);
+  const normalizedJobCityFilter = normalizeCityFilter(job?.cityFilter);
+  const isCitySyncRunning =
+    isSyncRunning &&
+    Boolean(normalizedActiveCitySlug) &&
+    normalizedJobCityFilter === normalizedActiveCitySlug;
+  const isSyncAllRunning = isSyncRunning && !normalizedJobCityFilter;
+  const canRunCitySync = Boolean(activeCitySlug);
+  const cityButtonLabel =
+    startingSyncAction === "city" ? "Starting…" : isCitySyncRunning ? "Syncing…" : "Run sync";
+  const syncAllButtonLabel =
+    startingSyncAction === "all" ? "Starting…" : isSyncAllRunning ? "Syncing…" : "Sync all";
   const recentMessages = job ? [...job.recentMessages].reverse().slice(0, 6) : [];
   const cityProgressLabel =
     job?.status === "running" && job.currentCity
@@ -752,16 +784,34 @@ function ComparisonSyncPanel({
       <div className="comparison-panel-heading">
         <div>
           <h2>Raw Comparison Sync</h2>
-          <p>{statusLabel ?? "Runs the persisted settlement comparison refresh in the background."}</p>
+          <p>
+            {statusLabel ??
+              (activeCityLabel
+                ? `Run sync resumes ${activeCityLabel} from its latest stored day through its current local day, and falls back to its earliest resolved day if no history exists. Sync all does the same for every city.`
+                : "Sync all resumes every city from its latest stored day through its current local day, and falls back to each city's earliest resolved day if needed. Select a city to enable Run sync for a single city.")}
+          </p>
         </div>
         <div className="comparison-sync-actions">
           <button
             className="refresh-button comparison-sync-button"
             type="button"
             onClick={() => void onRunSync()}
+            disabled={isPageLoading || isStartingSync || isSyncRunning || !canRunCitySync}
+            title={
+              canRunCitySync
+                ? undefined
+                : "Select a city above to sync a single city through its current local day."
+            }
+          >
+            {cityButtonLabel}
+          </button>
+          <button
+            className="refresh-button comparison-sync-button"
+            type="button"
+            onClick={() => void onRunSyncAll()}
             disabled={isPageLoading || isStartingSync || isSyncRunning}
           >
-            {buttonLabel}
+            {syncAllButtonLabel}
           </button>
           <button
             className="comparison-sync-toggle"
@@ -778,7 +828,13 @@ function ComparisonSyncPanel({
 
       <div className="comparison-meta-bar comparison-sync-compact-bar">
         <p>{compactSummary}</p>
-        <p>{job ? job.stepLabel : "Run the sync to refresh the persisted comparison rows."}</p>
+        <p>
+          {job
+            ? job.stepLabel
+            : activeCityLabel
+              ? `Run sync refreshes ${activeCityLabel} through its current local day, or use Sync all to refresh every city.`
+              : "Select a city to enable Run sync, or use Sync all to refresh every city through its current local day."}
+        </p>
       </div>
 
       {requestError ? (
@@ -849,8 +905,12 @@ function ComparisonSyncPanel({
         </>
       ) : !job && isExpanded ? (
         <div className="comparison-meta-bar">
-          <p>Run the sync to refresh the persisted comparison rows for the current date window.</p>
-          <p>The page stays interactive while the job reports progress in the background.</p>
+          <p>
+            {activeCityLabel
+              ? `Run sync resumes ${activeCityLabel} from its latest stored day through its current local day, with fallback to its earliest resolved day if needed.`
+              : "Sync all resumes every city from its latest stored day through its current local day, with fallback to each city's earliest resolved day if needed."}
+          </p>
+          <p>The page stays interactive while the background job reports progress.</p>
         </div>
       ) : null}
     </section>
@@ -1014,8 +1074,16 @@ export function ComparisonDashboard({
 }: ComparisonDashboardProps) {
   const report = initialReport;
   const activeCity = initialCityDetail;
+  const activeCitySlug = activeCity?.airport.slug ?? null;
+  const activeCityLabel = activeCity?.airport.city ?? null;
+  const syncPanelDescription = activeCityLabel
+    ? `Run sync resumes ${activeCityLabel} from its latest stored day through its current local day, and falls back to its earliest resolved day if no history exists. Sync all does the same for every city.`
+    : "Sync all resumes every city from its latest stored day through its current local day, and falls back to each city's earliest resolved day if needed. Select a city to enable Run sync for a single city.";
+  const syncPanelStatusLabel = statusLabel
+    ? `${statusLabel}${/[.!?]$/u.test(statusLabel) ? "" : "."} ${syncPanelDescription}`
+    : syncPanelDescription;
   const selectedCityValue =
-    activeCity?.airport.slug ??
+    activeCitySlug ??
     normalizeCityFilter(report.cityFilter) ??
     normalizeCityFilter(initialCity) ??
     "";
@@ -1026,7 +1094,7 @@ export function ComparisonDashboard({
   const latestAcceptedJobRef = useRef<ComparisonSyncJobSnapshot | null>(null);
   const [syncJob, setSyncJob] = useState<ComparisonSyncJobSnapshot | null>(null);
   const [syncRequestError, setSyncRequestError] = useState<string | null>(null);
-  const [isStartingSync, setIsStartingSync] = useState(false);
+  const [startingSyncAction, setStartingSyncAction] = useState<"city" | "all" | null>(null);
 
   function acceptSyncJob(job: ComparisonSyncJobSnapshot | null) {
     const currentJob = latestAcceptedJobRef.current;
@@ -1070,7 +1138,10 @@ export function ComparisonDashboard({
     return payload as ComparisonSyncJobLookupResponse;
   }
 
-  async function startComparisonSyncRequest() {
+  async function startComparisonSyncRequest(params: {
+    city: string | null;
+    syncMode: ComparisonSyncMode;
+  }) {
     const response = await fetch("/api/comparison/sync", {
       method: "POST",
       headers: {
@@ -1079,9 +1150,8 @@ export function ComparisonDashboard({
       },
       cache: "no-store",
       body: JSON.stringify({
-        startDate: report.startDate,
-        endDate: report.endDate,
-        city: normalizeCityFilter(report.cityFilter),
+        city: normalizeCityFilter(params.city),
+        syncMode: params.syncMode,
       }),
     });
     const payload = (await response.json().catch(() => null)) as
@@ -1154,12 +1224,15 @@ export function ComparisonDashboard({
     }
   });
 
-  const runComparisonSync = useEffectEvent(async () => {
-    setIsStartingSync(true);
+  const runComparisonSync = useEffectEvent(async (action: "city" | "all", city: string | null) => {
+    setStartingSyncAction(action);
     setSyncRequestError(null);
 
     try {
-      const payload = await startComparisonSyncRequest();
+      const payload = await startComparisonSyncRequest({
+        city,
+        syncMode: "coverage-to-current-day",
+      });
       const job = acceptSyncJob(payload.job);
       if (job && job.status === "running") {
         await pollComparisonSyncJob(job.id, () => stoppedRef.current);
@@ -1172,9 +1245,21 @@ export function ComparisonDashboard({
       }
     } finally {
       if (!stoppedRef.current) {
-        setIsStartingSync(false);
+        setStartingSyncAction(null);
       }
     }
+  });
+
+  const runCurrentCityComparisonSync = useEffectEvent(async () => {
+    if (!activeCitySlug) {
+      return;
+    }
+
+    await runComparisonSync("city", activeCitySlug);
+  });
+
+  const runAllCitiesComparisonSync = useEffectEvent(async () => {
+    await runComparisonSync("all", null);
   });
 
   useEffect(() => {
@@ -1197,9 +1282,7 @@ export function ComparisonDashboard({
       previousJob.id === currentJob.id &&
       previousJob.status === "running" &&
       currentJob.status === "completed" &&
-      currentJob.startDate === report.startDate &&
-      currentJob.endDate === report.endDate &&
-      normalizeCityFilter(currentJob.cityFilter) === normalizeCityFilter(report.cityFilter)
+      doesSyncJobAffectReport(currentJob, report)
     ) {
       revalidator.revalidate();
     }
@@ -1274,10 +1357,13 @@ export function ComparisonDashboard({
       <ComparisonSyncPanel
         job={syncJob}
         requestError={syncRequestError}
-        isStartingSync={isStartingSync}
+        startingSyncAction={startingSyncAction}
         isPageLoading={isLoading}
-        onRunSync={runComparisonSync}
-        statusLabel={statusLabel}
+        activeCityLabel={activeCityLabel}
+        activeCitySlug={activeCitySlug}
+        onRunSync={runCurrentCityComparisonSync}
+        onRunSyncAll={runAllCitiesComparisonSync}
+        statusLabel={syncPanelStatusLabel}
       />
     </main>
   );

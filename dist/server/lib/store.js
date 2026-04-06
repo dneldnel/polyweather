@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getWeatherStore = getWeatherStore;
 exports.buildWeatherResponse = buildWeatherResponse;
 exports.buildWeatherCardDetailResponse = buildWeatherCardDetailResponse;
+const later_high_delta_breakdown_1 = require("./later-high-delta-breakdown");
 function createStore() {
     return {
         snapshot: null,
@@ -67,11 +68,16 @@ function buildWeatherResponse() {
         responseIssuedAt: new Date().toISOString(),
     };
 }
-function buildWeatherCardDetailResponse(slug) {
+async function buildWeatherCardDetailResponse(slug) {
     const store = getWeatherStore();
     const card = store.snapshot?.cards?.find((entry) => entry.airport.slug === slug) ?? null;
     return {
-        card,
+        card: card
+            ? {
+                ...card,
+                laterHighDeltaBreakdown: await (0, later_high_delta_breakdown_1.buildLaterHighDeltaBreakdown)(card),
+            }
+            : null,
         error: null,
         responseIssuedAt: new Date().toISOString(),
     };

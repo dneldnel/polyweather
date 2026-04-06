@@ -50,10 +50,11 @@ async function handleComparisonRequest(req: Request, res: Response) {
 async function handleComparisonSyncStart(req: Request, res: Response) {
   try {
     setNoStore(res);
-    const payload = startComparisonSyncJob({
+    const payload = await startComparisonSyncJob({
       startDate: req.body?.startDate,
       endDate: req.body?.endDate,
       city: req.body?.city,
+      syncMode: req.body?.syncMode,
     });
     res.status(202).json(payload);
   } catch (error) {
@@ -105,7 +106,7 @@ async function handleWeatherCard(req: Request, res: Response) {
     return;
   }
 
-  res.json(buildWeatherCardDetailResponse(slug));
+  res.json(await buildWeatherCardDetailResponse(slug));
 }
 
 async function handleWeatherRefresh(req: Request, res: Response) {

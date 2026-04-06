@@ -107,6 +107,7 @@ export type ComparisonSyncSummary = {
   startDate: string;
   endDate: string;
   cityFilter: string | null;
+  scopeLabel: string | null;
   databaseUrl: string;
   citiesProcessed: number;
   polymarketDaysUpserted: number;
@@ -122,6 +123,8 @@ export type ComparisonSyncProgressStage =
   | "rebuilding-future-high-stats"
   | "completed"
   | "failed";
+
+export type ComparisonSyncMode = "selected-window" | "coverage-to-current-day";
 
 export type ComparisonSyncProgressEvent = {
   stage: ComparisonSyncProgressStage;
@@ -143,6 +146,7 @@ export type ComparisonSyncJobLogEntry = {
 
 export type ComparisonSyncJobSnapshot = {
   id: string;
+  mode: ComparisonSyncMode;
   status: ComparisonSyncJobStatus;
   stage: ComparisonSyncProgressStage;
   requestedAt: string;
@@ -152,6 +156,7 @@ export type ComparisonSyncJobSnapshot = {
   startDate: string;
   endDate: string;
   cityFilter: string | null;
+  scopeLabel: string | null;
   totalCities: number;
   completedCities: number;
   currentCitySlug: string | null;

@@ -56,6 +56,13 @@ const INDEX_HTML_PATH = node_path_1.default.resolve(PROJECT_ROOT, "index.html");
 const CLIENT_INDEX_HTML_PATH = node_path_1.default.resolve(CLIENT_DIST_DIR, "index.html");
 const HOME_SPA_PATHS = ["/"];
 const COMPARISON_SPA_PATHS = ["/comparison", "/comparison/"];
+function isBasicAuthEnabledForCurrentEnvironment() {
+    if (process.env.NODE_ENV === "production") {
+        return true;
+    }
+    const developmentFlag = process.env.BASIC_AUTH_IN_DEVELOPMENT?.trim().toLowerCase();
+    return developmentFlag === "true" || developmentFlag === "1";
+}
 function serializeForInlineScript(value) {
     return JSON.stringify(value)
         .replace(/</g, "\\u003c")
@@ -70,6 +77,9 @@ function injectBeforeBodyEnd(html, snippet) {
         : `${html}\n${snippet}`;
 }
 function getBasicAuthConfig() {
+    if (!isBasicAuthEnabledForCurrentEnvironment()) {
+        return null;
+    }
     const username = process.env.BASIC_AUTH_USERNAME?.trim() ?? "";
     const password = process.env.BASIC_AUTH_PASSWORD?.trim() ?? "";
     if (!username && !password) {

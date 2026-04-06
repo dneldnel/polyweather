@@ -8,6 +8,7 @@ exports.getAviationObservationRows = getAviationObservationRows;
 exports.getPolymarketDayRows = getPolymarketDayRows;
 exports.getResolvedPolymarketDayRows = getResolvedPolymarketDayRows;
 exports.getLatestResolvedPolymarketDate = getLatestResolvedPolymarketDate;
+exports.getLatestStoredComparisonResumeDate = getLatestStoredComparisonResumeDate;
 exports.getWundergroundDaySummariesForResolvedPolymarket = getWundergroundDaySummariesForResolvedPolymarket;
 exports.getAviationDaySummariesForResolvedPolymarket = getAviationDaySummariesForResolvedPolymarket;
 exports.getWundergroundObservationDay = getWundergroundObservationDay;
@@ -348,6 +349,40 @@ async function getLatestResolvedPolymarketDate(citySlug) {
     const latestLocalDate = result.rows[0]?.latest_local_date;
     return typeof latestLocalDate === "string" && latestLocalDate.trim()
         ? latestLocalDate
+        : null;
+}
+async function getLatestStoredComparisonResumeDate(citySlug) {
+    await ensureComparisonDb();
+    const result = await execute(`
+      WITH latest_dates AS (
+        SELECT MAX(local_date) AS latest_local_date
+        FROM wu_observations
+        WHERE city_slug = ?
+
+        UNION ALL
+
+        SELECT MAX(local_date) AS latest_local_date
+        FROM aw_observations
+        WHERE city_slug = ?
+
+        UNION ALL
+
+        SELECT MAX(local_date) AS latest_local_date
+        FROM polymarket_days
+        WHERE city_slug = ?
+      )
+      SELECT
+        COUNT(latest_local_date) AS populated_source_count,
+        MIN(latest_local_date) AS resume_local_date
+      FROM latest_dates
+    `, [citySlug, citySlug, citySlug]);
+    const populatedSourceCount = Number(result.rows[0]?.populated_source_count ?? 0);
+    const resumeLocalDate = result.rows[0]?.resume_local_date;
+    if (populatedSourceCount !== 3) {
+        return null;
+    }
+    return typeof resumeLocalDate === "string" && resumeLocalDate.trim()
+        ? resumeLocalDate
         : null;
 }
 async function getWundergroundDaySummariesForResolvedPolymarket(params) {

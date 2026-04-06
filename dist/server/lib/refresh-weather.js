@@ -8,6 +8,7 @@ exports.refreshCardAndRespond = refreshCardAndRespond;
 const airports_1 = require("./airports");
 const db_1 = require("./comparison/db");
 const homepage_refresh_priority_1 = require("./homepage-refresh-priority");
+const later_high_delta_breakdown_1 = require("./later-high-delta-breakdown");
 const signal_model_config_1 = require("./signal-model-config");
 const store_1 = require("./store");
 const temperature_1 = require("./temperature");
@@ -714,6 +715,7 @@ async function refreshCard(airport, previousCard) {
         wuCurrent: wuCurrentReading,
         wuTodayHigh: wuTodayHighReading,
         historyBasedLaterHigh: historyBasedLaterHighCurve,
+        laterHighDeltaBreakdown: (0, later_high_delta_breakdown_1.createEmptyLaterHighDeltaBreakdown)(),
         aviationWeatherCurrent: aviationReading,
         aviationWeatherTrend: aviationTrend,
         defaultWeatherSignalsSourceId: signal_model_config_1.DEFAULT_SIGNAL_MODEL.forecastModel,

@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
 
 import { normalizeComparisonQuery } from "./query";
-import { renderComparisonSyncSummary, runComparisonSync } from "./sync";
+import {
+  createComparisonCurrentDaySyncPlan,
+  renderComparisonSyncSummary,
+  runComparisonCurrentDaySync,
+  runComparisonSync,
+} from "./sync";
 
 import type {
+  ComparisonSyncMode,
   ComparisonSyncJobSnapshot,
   ComparisonSyncJobStartResponse,
   ComparisonSyncSummary,
@@ -56,6 +62,15 @@ function readStringValue(value: unknown) {
   if (Array.isArray(value)) {
     const firstValue = value[0];
     return typeof firstValue === "string" ? firstValue : null;
+  }
+
+  return null;
+}
+
+function readSyncMode(value: unknown): ComparisonSyncMode | null {
+  const candidate = readStringValue(value)?.trim() ?? null;
+  if (candidate === "selected-window" || candidate === "coverage-to-current-day") {
+    return candidate;
   }
 
   return null;
@@ -141,11 +156,12 @@ export function getLatestComparisonSyncJobSnapshot() {
   return latestJob ? cloneJob(latestJob) : null;
 }
 
-export function startComparisonSyncJob(input: {
+export async function startComparisonSyncJob(input: {
   startDate?: unknown;
   endDate?: unknown;
   city?: unknown;
-}): ComparisonSyncJobStartResponse {
+  syncMode?: unknown;
+}): Promise<ComparisonSyncJobStartResponse> {
   const store = getStore();
   const activeJob = store.activeJobId ? store.jobs.get(store.activeJobId) ?? null : null;
 
@@ -156,30 +172,68 @@ export function startComparisonSyncJob(input: {
     };
   }
 
-  const normalized = normalizeComparisonQuery({
-    startDate: readStringValue(input.startDate),
-    endDate: readStringValue(input.endDate),
-    city: readStringValue(input.city),
-  });
-  const cityFilter = normalized.cityFilter?.trim() || null;
+  const syncMode = readSyncMode(input.syncMode) ?? "selected-window";
+  const currentDayPlan =
+    syncMode === "coverage-to-current-day"
+      ? await createComparisonCurrentDaySyncPlan(readStringValue(input.city)?.trim() ?? null)
+      : null;
+  const latestActiveJob = store.activeJobId ? store.jobs.get(store.activeJobId) ?? null : null;
+
+  if (latestActiveJob && latestActiveJob.status === "running") {
+    return {
+      job: cloneJob(latestActiveJob),
+      reusedExistingJob: true,
+    };
+  }
+
+  let startDate: string;
+  let endDate: string;
+  let cityFilter: string | null;
+  let totalCities: number;
+  let scopeLabel: string | null;
+
+  if (currentDayPlan) {
+    startDate = currentDayPlan.startDate;
+    endDate = currentDayPlan.endDate;
+    cityFilter = currentDayPlan.cityFilter;
+    totalCities = currentDayPlan.targets.length;
+    scopeLabel = currentDayPlan.scopeLabel;
+  } else {
+    const normalized = normalizeComparisonQuery({
+      startDate: readStringValue(input.startDate),
+      endDate: readStringValue(input.endDate),
+      city: readStringValue(input.city),
+    });
+    startDate = normalized.startDate;
+    endDate = normalized.endDate;
+    cityFilter = normalized.cityFilter?.trim() || null;
+    totalCities = normalized.airports.length;
+    scopeLabel = null;
+  }
+
   const now = new Date().toISOString();
   const job: ComparisonSyncJobSnapshot = {
     id: randomUUID(),
+    mode: syncMode,
     status: "running",
     stage: "starting",
     requestedAt: now,
     startedAt: now,
     finishedAt: null,
     updatedAt: now,
-    startDate: normalized.startDate,
-    endDate: normalized.endDate,
+    startDate,
+    endDate,
     cityFilter,
-    totalCities: normalized.airports.length,
+    scopeLabel,
+    totalCities,
     completedCities: 0,
     currentCitySlug: null,
     currentCity: null,
     progressPercent: 0,
-    stepLabel: "Queued comparison sync",
+    stepLabel:
+      syncMode === "coverage-to-current-day"
+        ? "Queued comparison sync to current local day"
+        : "Queued comparison sync",
     recentMessages: [],
     summary: null,
     error: null,
@@ -190,23 +244,38 @@ export function startComparisonSyncJob(input: {
   store.activeJobId = job.id;
   store.latestJobId = job.id;
 
-  const promise = runComparisonSync(
-    {
-      startDate: job.startDate,
-      endDate: job.endDate,
-      cityFilter: job.cityFilter,
-    },
-    {
-      onProgress: (event) => {
-        const currentJob = store.jobs.get(job.id);
-        if (!currentJob) {
-          return;
-        }
+  const handleProgress = (event: {
+    stage: ComparisonSyncJobSnapshot["stage"];
+    message: string;
+    totalCities: number;
+    completedCities: number;
+    citySlug: string | null;
+    city: string | null;
+    progressFraction: number;
+  }) => {
+    const currentJob = store.jobs.get(job.id);
+    if (!currentJob) {
+      return;
+    }
 
-        updateJobFromProgress(currentJob, event);
-      },
-    },
-  )
+    updateJobFromProgress(currentJob, event);
+  };
+
+  const promise =
+    (currentDayPlan
+      ? runComparisonCurrentDaySync(currentDayPlan, {
+          onProgress: handleProgress,
+        })
+      : runComparisonSync(
+          {
+            startDate: job.startDate,
+            endDate: job.endDate,
+            cityFilter: job.cityFilter,
+          },
+          {
+            onProgress: handleProgress,
+          },
+        ))
     .then((summary) => {
       const currentJob = store.jobs.get(job.id);
       if (!currentJob) {
@@ -223,6 +292,7 @@ export function startComparisonSyncJob(input: {
       currentJob.currentCity = null;
       currentJob.progressPercent = 100;
       currentJob.summary = summary;
+      currentJob.scopeLabel = summary.scopeLabel;
       currentJob.error = null;
       currentJob.stepLabel = summarizeCompletedJob(summary);
       pushJobMessage(currentJob, currentJob.stepLabel, finishedAt);

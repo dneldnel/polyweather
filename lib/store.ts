@@ -1,3 +1,5 @@
+import { buildLaterHighDeltaBreakdown } from "./later-high-delta-breakdown";
+
 import type {
   RefreshState,
   WeatherCard,
@@ -96,12 +98,19 @@ export function buildWeatherResponse(): WeatherResponse {
   };
 }
 
-export function buildWeatherCardDetailResponse(slug: string): WeatherCardDetailResponse {
+export async function buildWeatherCardDetailResponse(
+  slug: string,
+): Promise<WeatherCardDetailResponse> {
   const store = getWeatherStore();
   const card = store.snapshot?.cards?.find((entry) => entry.airport.slug === slug) ?? null;
 
   return {
-    card,
+    card: card
+      ? {
+          ...card,
+          laterHighDeltaBreakdown: await buildLaterHighDeltaBreakdown(card),
+        }
+      : null,
     error: null,
     responseIssuedAt: new Date().toISOString(),
   };

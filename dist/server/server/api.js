@@ -36,10 +36,11 @@ async function handleComparisonRequest(req, res) {
 async function handleComparisonSyncStart(req, res) {
     try {
         setNoStore(res);
-        const payload = (0, sync_job_1.startComparisonSyncJob)({
+        const payload = await (0, sync_job_1.startComparisonSyncJob)({
             startDate: req.body?.startDate,
             endDate: req.body?.endDate,
             city: req.body?.city,
+            syncMode: req.body?.syncMode,
         });
         res.status(202).json(payload);
     }
@@ -81,7 +82,7 @@ async function handleWeatherCard(req, res) {
         res.status(404).json({ error: `Unknown weather card: ${slug}` });
         return;
     }
-    res.json((0, store_1.buildWeatherCardDetailResponse)(slug));
+    res.json(await (0, store_1.buildWeatherCardDetailResponse)(slug));
 }
 async function handleWeatherRefresh(req, res) {
     setNoStore(res);

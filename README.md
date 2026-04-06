@@ -34,7 +34,9 @@ Optional access control:
 
 - `BASIC_AUTH_USERNAME`
 - `BASIC_AUTH_PASSWORD`
-  - If both are set, the entire app and all `/api/*` routes are protected with HTTP Basic Auth.
+  - In production, if both are set, the entire app and all `/api/*` routes are protected with HTTP Basic Auth.
+- `BASIC_AUTH_IN_DEVELOPMENT=true`
+  - Opt in if you also want local `npm run dev` to require HTTP Basic Auth.
 
 ## Behavior
 

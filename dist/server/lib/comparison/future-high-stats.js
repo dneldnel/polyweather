@@ -1,11 +1,33 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.rebuildWundergroundFutureHighHourlyStatsForCity = rebuildWundergroundFutureHighHourlyStatsForCity;
+const airports_1 = require("../airports");
 const db_1 = require("./db");
 const MIN_ELIGIBLE_WU_OBSERVATIONS_PER_DAY = 12;
 const FUTURE_HIGH_METHOD = "wu-running-max-hourly-v1";
+const AIRPORTS_BY_SLUG = new Map(airports_1.AIRPORTS.map((airport) => [airport.slug, airport]));
+function formatDateInTimezone(date, timeZone) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    if (!year || !month || !day) {
+        throw new Error(`Could not format date in timezone ${timeZone}`);
+    }
+    return `${year}-${month}-${day}`;
+}
 async function rebuildWundergroundFutureHighHourlyStatsForCity(citySlug) {
     await (0, db_1.ensureComparisonDb)();
+    const airport = AIRPORTS_BY_SLUG.get(citySlug);
+    if (!airport) {
+        throw new Error(`Unknown airport slug for WU future-high rebuild: ${citySlug}`);
+    }
+    const currentLocalDate = formatDateInTimezone(new Date(), airport.timezone);
     const result = await (0, db_1.getComparisonDbClient)().execute({
         sql: `
       WITH eligible_days AS (
@@ -16,6 +38,7 @@ async function rebuildWundergroundFutureHighHourlyStatsForCity(citySlug) {
         FROM wu_observations
         WHERE city_slug = ?
           AND temp_c IS NOT NULL
+          AND local_date < ?
         GROUP BY city_slug, local_date
         HAVING COUNT(*) >= ?
       ),
@@ -59,7 +82,7 @@ async function rebuildWundergroundFutureHighHourlyStatsForCity(citySlug) {
       GROUP BY hs.city_slug, hs.hour_bucket
       ORDER BY hs.hour_bucket
     `,
-        args: [citySlug, MIN_ELIGIBLE_WU_OBSERVATIONS_PER_DAY],
+        args: [citySlug, currentLocalDate, MIN_ELIGIBLE_WU_OBSERVATIONS_PER_DAY],
     });
     const generatedAt = new Date().toISOString();
     const records = result.rows.map((row) => {

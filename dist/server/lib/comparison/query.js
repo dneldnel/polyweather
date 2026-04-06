@@ -40,7 +40,7 @@ function buildComparisonHref({ startDate, endDate, city, selectedDate, }) {
 }
 function getDefaultComparisonWindow() {
     const endDate = shiftDate(new Date().toISOString().slice(0, 10), -1);
-    const startDate = shiftDate(endDate, -7);
+    const startDate = shiftDate(endDate, -8);
     return { startDate, endDate };
 }
 function enumerateDates(startDate, endDate) {

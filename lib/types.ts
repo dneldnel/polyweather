@@ -106,6 +106,42 @@ export type HistoryBasedLaterHighCurve = {
   error: string | null;
 };
 
+export type LaterHighDeltaSample = {
+  localDate: string;
+  peakLocalTime: string;
+};
+
+export type LaterHighDeltaBucket = {
+  delta: number;
+  count: number;
+  probability: number;
+  samples: LaterHighDeltaSample[];
+};
+
+export type LaterHighDeltaSeries = {
+  sampleDayCount: number;
+  noHigherPeakDayCount: number;
+  noHigherPeakSamples: LaterHighDeltaSample[];
+  positiveDeltaDayCount: number;
+  maxDelta: number | null;
+  buckets: LaterHighDeltaBucket[];
+};
+
+export type LaterHighDeltaBreakdown = {
+  generatedAt: string | null;
+  method: string | null;
+  cutoffLocalTime: string | null;
+  displayUnit: TemperatureUnit | null;
+  historyDayCount: number;
+  basisDayCount: number;
+  laterObservationDayCount: number;
+  recentValidDayCount: number;
+  allTime: LaterHighDeltaSeries;
+  recent10: LaterHighDeltaSeries;
+  status: SourceStatus;
+  error: string | null;
+};
+
 export type WeatherCard = {
   airport: AirportConfig;
   cardUpdatedAt: string | null;
@@ -113,6 +149,7 @@ export type WeatherCard = {
   wuCurrent: SourceReading;
   wuTodayHigh: SourceReading;
   historyBasedLaterHigh: HistoryBasedLaterHighCurve;
+  laterHighDeltaBreakdown: LaterHighDeltaBreakdown;
   aviationWeatherCurrent: SourceReading;
   aviationWeatherTrend: TemperatureTrend;
   defaultWeatherSignalsSourceId: string;
