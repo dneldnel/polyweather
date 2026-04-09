@@ -1561,6 +1561,7 @@ a {
 .later-high-delta-legend {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px 14px;
 }
 
@@ -1582,6 +1583,24 @@ a {
 
 .later-high-delta-legend-item.is-recent .later-high-delta-legend-swatch {
   background: linear-gradient(90deg, rgba(255, 174, 89, 0.94), rgba(255, 113, 91, 0.92));
+}
+
+.later-high-delta-history-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.later-high-delta-history-checkbox {
+  width: 12px;
+  height: 12px;
+  margin: 0 0 0 1px;
+  accent-color: #9ddeff;
+  cursor: pointer;
+}
+
+.later-high-delta-history-checkbox:focus-visible {
+  outline: 2px solid rgba(157, 222, 255, 0.72);
+  outline-offset: 2px;
 }
 
 .later-high-delta-row {
@@ -1611,10 +1630,18 @@ a {
 .later-high-delta-series-stats {
   min-width: 70px;
   display: grid;
-  grid-template-columns: auto auto;
   column-gap: 8px;
   row-gap: 0;
   justify-items: end;
+}
+
+.later-high-delta-series-stats.is-single {
+  min-width: 34px;
+  grid-template-columns: auto;
+}
+
+.later-high-delta-series-stats.is-dual {
+  grid-template-columns: auto auto;
 }
 
 .later-high-delta-series-slot {

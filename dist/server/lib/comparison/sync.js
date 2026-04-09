@@ -21,6 +21,7 @@ const WEATHER_COM_PUBLIC_API_KEY = process.env.WUNDERGROUND_SUN_API_KEY ?? "e1f1
 const AVIATION_WEATHER_ARCHIVE_DAYS = 31;
 const AVIATION_WEATHER_WINDOW_DAYS = 7;
 const WUNDERGROUND_HISTORY_WINDOW_DAYS = 14;
+const COMPARISON_SYNC_REFRESH_LOOKBACK_DAYS = 7;
 const USER_AGENT = "polyweather/0.1 (+https://github.com/openai/codex)";
 const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
 function logProgress(message) {
@@ -155,24 +156,59 @@ function getMaxDate(values) {
     }
     return latest;
 }
+function getBoundedRecentLookbackStartDate(earliestResolvedDate, endDate) {
+    const recentLookbackStartDate = shiftDate(endDate, -COMPARISON_SYNC_REFRESH_LOOKBACK_DAYS);
+    return recentLookbackStartDate < earliestResolvedDate
+        ? earliestResolvedDate
+        : recentLookbackStartDate;
+}
+function chooseCurrentDaySyncStart(params) {
+    if (!params.latestStoredResumeDate) {
+        return {
+            startDate: params.earliestResolvedDate,
+            startReason: "earliest-resolved-day",
+        };
+    }
+    const candidates = [
+        {
+            startDate: params.latestStoredResumeDate,
+            startReason: "latest-stored-day",
+        },
+        {
+            startDate: getBoundedRecentLookbackStartDate(params.earliestResolvedDate, params.endDate),
+            startReason: "recent-lookback-day",
+        },
+    ];
+    if (params.earliestUnresolvedPolymarketDate) {
+        candidates.push({
+            startDate: params.earliestUnresolvedPolymarketDate < params.earliestResolvedDate
+                ? params.earliestResolvedDate
+                : params.earliestUnresolvedPolymarketDate,
+            startReason: "earliest-unresolved-day",
+        });
+    }
+    return candidates.sort((left, right) => left.startDate.localeCompare(right.startDate))[0];
+}
 function describeCurrentDaySyncTarget(target) {
-    return target.startReason === "latest-stored-day"
-        ? `${target.startDate}..${target.endDate} · ${target.config.slug} (resume from latest stored day)`
-        : `${target.startDate}..${target.endDate} · ${target.config.slug} (earliest resolved day -> current local day)`;
+    const reasonLabel = target.startReason === "latest-stored-day"
+        ? "resume from latest stored day"
+        : target.startReason === "earliest-unresolved-day"
+            ? "refresh from earliest unresolved Polymarket day"
+            : target.startReason === "recent-lookback-day"
+                ? `refresh last ${COMPARISON_SYNC_REFRESH_LOOKBACK_DAYS} days`
+                : "earliest resolved day -> current local day";
+    return `${target.startDate}..${target.endDate} · ${target.config.slug} (${reasonLabel})`;
 }
 function buildCurrentDaySyncScopeLabel(targets) {
     if (targets.length === 1) {
         const [target] = targets;
         return describeCurrentDaySyncTarget(target);
     }
-    const latestStoredTargetCount = targets.filter((target) => target.startReason === "latest-stored-day").length;
-    if (latestStoredTargetCount === targets.length) {
-        return "Per-city latest stored day..current local day · all cities";
-    }
-    if (latestStoredTargetCount === 0) {
+    const earliestResolvedTargetCount = targets.filter((target) => target.startReason === "earliest-resolved-day").length;
+    if (earliestResolvedTargetCount === targets.length) {
         return "Per-city earliest resolved day..current local day · all cities";
     }
-    return "Per-city latest stored day or earliest resolved day..current local day · all cities";
+    return `Per-city unresolved/recent-${COMPARISON_SYNC_REFRESH_LOOKBACK_DAYS}-day refresh..current local day · all cities`;
 }
 async function createComparisonCurrentDaySyncPlan(cityFilter) {
     const normalizedCityFilter = cityFilter?.trim() || null;
@@ -182,10 +218,17 @@ async function createComparisonCurrentDaySyncPlan(cityFilter) {
         if (!earliestResolvedDate) {
             throw new Error(`Missing earliest resolved comparison day for city ${config.slug}`);
         }
-        const latestStoredResumeDate = await (0, db_1.getLatestStoredComparisonResumeDate)(config.slug);
-        const startDate = latestStoredResumeDate ?? earliestResolvedDate;
-        const startReason = latestStoredResumeDate ? "latest-stored-day" : "earliest-resolved-day";
+        const [latestStoredResumeDate, earliestUnresolvedPolymarketDate] = await Promise.all([
+            (0, db_1.getLatestStoredComparisonResumeDate)(config.slug),
+            (0, db_1.getEarliestUnresolvedPolymarketDate)(config.slug),
+        ]);
         const endDate = formatDateInTimezone(new Date(), config.timezone);
+        const { startDate, startReason } = chooseCurrentDaySyncStart({
+            earliestResolvedDate,
+            earliestUnresolvedPolymarketDate,
+            endDate,
+            latestStoredResumeDate,
+        });
         if (startDate > endDate) {
             throw new Error(`City ${config.slug} has resume date ${startDate} after current local date ${endDate}`);
         }

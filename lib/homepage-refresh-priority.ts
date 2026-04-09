@@ -1,7 +1,7 @@
 import { AIRPORTS } from "./airports";
 import type { AirportConfig } from "./types";
 
-const LOCAL_TIME_SORT_START_MINUTES = 11 * 60;
+const LOCAL_TIME_SORT_START_MINUTES = 8 * 60;
 const HOMEPAGE_PRIORITY_BATCH_SIZE = 6;
 
 function getLocalTimeSortKey(value: Date, timezone: string) {

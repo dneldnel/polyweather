@@ -6,6 +6,7 @@ import type { CSSProperties, RefObject } from "react";
 import { AIRPORTS } from "../../lib/airports";
 import { buildComparisonHref } from "../../lib/comparison/query";
 import { convertTemperature, getAirportDisplayTemperatureUnit } from "../../lib/temperature";
+import { TemperatureHistoryChart } from "./temperature-history-chart";
 import type {
   SourceReading,
   TemperatureTrend,
@@ -21,7 +22,7 @@ import type {
 const SNAPSHOT_POLL_INTERVAL_MS = 750;
 const AUTO_REFRESH_MAX_AGE_MS = 5 * 60_000;
 const LOCAL_TIME_REFRESH_INTERVAL_MS = 60_000;
-const LOCAL_TIME_SORT_START_MINUTES = 11 * 60;
+const LOCAL_TIME_SORT_START_MINUTES = 8 * 60;
 const FORECAST_COMPACT_COLUMN_COUNT = 3;
 
 declare global {
@@ -903,83 +904,30 @@ function CompactTodayHighReadings({
 function ObservedTemperatureChart({
   trend,
   timezone,
-  now,
   displayUnit,
 }: {
   trend: TemperatureTrend;
   timezone: string;
-  now: Date;
   displayUnit: TemperatureUnit;
 }) {
-  const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
-  const latestPoint = trend.points.at(-1) ?? null;
-  const currentMinutes = Math.max(getLocalClockMinutes(now, timezone), 1);
-  const chartPoints = trend.points.map((point) => {
-    const rawTemperature = point.temperature;
-    const temperature =
-      displayUnit === "C"
-        ? rawTemperature
-        : convertTemperature(rawTemperature, "C", displayUnit);
+  const peakPoint = trend.points.reduce<TemperatureTrend["points"][number] | null>((currentPeak, point) => {
+    if (!currentPeak || point.temperature > currentPeak.temperature) {
+      return point;
+    }
 
-    return {
-      ...point,
-      minutes: Math.min(getLocalClockMinutes(point.observedAt, timezone), currentMinutes),
-      temperature,
-    };
-  });
-  const temperatures = chartPoints.map((point) => point.temperature);
-  const minTemperature = temperatures.length > 0 ? Math.min(...temperatures) : null;
-  const maxTemperature = temperatures.length > 0 ? Math.max(...temperatures) : null;
-  const temperatureRange =
-    minTemperature !== null && maxTemperature !== null ? maxTemperature - minTemperature : 0;
-  const chartLeft = 8;
-  const chartRight = 312;
-  const chartTop = 10;
-  const chartBottom = 84;
-  const chartWidth = chartRight - chartLeft;
-  const chartHeight = chartBottom - chartTop;
-  const yPadding =
-    minTemperature === null || maxTemperature === null
-      ? 1
-      : temperatureRange < 0.8
-        ? 0.35
-        : temperatureRange * 0.08;
-  const yMin = minTemperature === null ? 0 : minTemperature - yPadding;
-  const yMax = maxTemperature === null ? 1 : maxTemperature + yPadding;
-  const yMid = chartTop + chartHeight / 2;
-  const axisTopLabel =
-    maxTemperature === null ? "—" : formatRawTemperature(maxTemperature, displayUnit);
-  const axisMidLabel =
-    minTemperature === null || maxTemperature === null
-      ? "—"
-      : formatRawTemperature((minTemperature + maxTemperature) / 2, displayUnit);
-  const axisBottomLabel =
-    minTemperature === null ? "—" : formatRawTemperature(minTemperature, displayUnit);
-  const coordinates = chartPoints.map((point) => {
-    const x = chartLeft + (point.minutes / currentMinutes) * chartWidth;
-    const y =
-      chartTop + (1 - (point.temperature - yMin) / Math.max(yMax - yMin, 0.001)) * chartHeight;
+    if (
+      point.temperature === currentPeak.temperature &&
+      point.observedAt.localeCompare(currentPeak.observedAt) > 0
+    ) {
+      return point;
+    }
 
-    return {
-      x,
-      y,
-    };
-  });
-  const hoveredCoordinate =
-    hoveredPointIndex !== null ? coordinates[hoveredPointIndex] ?? null : null;
-  const hoveredPoint =
-    hoveredPointIndex !== null ? chartPoints[hoveredPointIndex] ?? null : null;
-  const linePath = coordinates
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(" ");
-  const areaPath =
-    coordinates.length > 0
-      ? `${linePath} L ${coordinates.at(-1)?.x.toFixed(1)} ${chartBottom} L ${coordinates[0]?.x.toFixed(1)} ${chartBottom} Z`
-      : "";
-  const latestLabel = latestPoint
-    ? `Through ${formatObservedAt(latestPoint.observedAt, timezone)}`
-    : "No same-day AW observations yet";
-  const statusLabel =
+    return currentPeak;
+  }, null);
+  const peakLocal = peakPoint
+    ? formatLocalClockFromDate(new Date(peakPoint.observedAt), timezone)
+    : null;
+  const metaSuffix =
     trend.status === "stale"
       ? "Stale"
       : trend.status === "error" || trend.status === "missing"
@@ -987,97 +935,24 @@ function ObservedTemperatureChart({
         : null;
 
   return (
-    <section className="trend-panel" aria-label="Observed temperature trend">
-      <div className="trend-header">
-        <p>AW observed today</p>
-        <span>{statusLabel ? `${statusLabel} · ${latestLabel}` : latestLabel}</span>
-      </div>
-
-      {coordinates.length > 0 ? (
-        <>
-          <div className="trend-chart-frame">
-            <div className="trend-y-axis" aria-hidden="true">
-              <span>{axisTopLabel}</span>
-              <span>{axisMidLabel}</span>
-              <span>{axisBottomLabel}</span>
-            </div>
-            <div className="trend-chart">
-              <svg
-                className="trend-chart-svg"
-                viewBox="0 0 320 104"
-                role="img"
-                aria-label="Observed temperature curve from local midnight to now"
-              >
-                <line className="trend-grid-line" x1={chartLeft} x2={chartRight} y1={chartTop} y2={chartTop} />
-                <line className="trend-grid-line" x1={chartLeft} x2={chartRight} y1={yMid} y2={yMid} />
-                <line
-                  className="trend-grid-line trend-grid-line-strong"
-                  x1={chartLeft}
-                  x2={chartRight}
-                  y1={chartBottom}
-                  y2={chartBottom}
-                />
-                {areaPath ? <path className="trend-area" d={areaPath} /> : null}
-                {linePath ? <path className="trend-line" d={linePath} /> : null}
-                {coordinates.length > 0 ? (
-                  <circle
-                    className="trend-point"
-                    cx={coordinates.at(-1)?.x}
-                    cy={coordinates.at(-1)?.y}
-                    r="3.5"
-                  />
-                ) : null}
-                {coordinates.map((point, index) => (
-                  <circle
-                    key={`${chartPoints[index]?.observedAt ?? "trend-point"}-${index}`}
-                    className="trend-hitbox"
-                    cx={point.x}
-                    cy={point.y}
-                    r="10"
-                    onMouseEnter={() => setHoveredPointIndex(index)}
-                    onMouseMove={() => setHoveredPointIndex(index)}
-                    onFocus={() => setHoveredPointIndex(index)}
-                    onBlur={() => setHoveredPointIndex((currentIndex) => (currentIndex === index ? null : currentIndex))}
-                    onMouseLeave={() => setHoveredPointIndex((currentIndex) => (currentIndex === index ? null : currentIndex))}
-                    tabIndex={0}
-                  />
-                ))}
-              </svg>
-              {hoveredCoordinate && hoveredPoint ? (
-                <div
-                  className="trend-tooltip"
-                  style={{
-                    left: `${Math.min(Math.max(hoveredCoordinate.x / 320, 0.08), 0.92) * 100}%`,
-                    top: `${Math.min(Math.max((hoveredCoordinate.y - 8) / 104, 0.12), 0.88) * 100}%`,
-                  }}
-                >
-                  <strong>{formatRawTemperature(hoveredPoint.temperature, displayUnit)}</strong>
-                  <span>{formatObservedAt(hoveredPoint.observedAt, timezone)}</span>
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="trend-axis">
-            <span>00:00</span>
-            <strong>
-              {latestPoint
-                ? formatRawTemperature(
-                    displayUnit === "C"
-                      ? latestPoint.temperature
-                      : convertTemperature(latestPoint.temperature, "C", displayUnit),
-                    displayUnit,
-                  )
-                : "—"}
-            </strong>
-            <span>{formatLocalClockFromDate(now, timezone)}</span>
-          </div>
-        </>
-      ) : (
-        <div className="trend-empty">
-          {trend.error?.trim() ?? "No same-day AW observations yet."}
-        </div>
-      )}
-    </section>
+    <TemperatureHistoryChart
+      ariaLabel="AW observed temperature curve for today"
+      displayUnit={displayUnit}
+      emptyMessage={trend.error?.trim() ?? "No same-day AW observations yet."}
+      label="AW observed today"
+      metaSuffix={metaSuffix}
+      sectionClassName="comparison-detail-chart"
+      source={{
+        points: trend.points.map((point) => ({
+          observedAt: point.observedAt,
+          temperatureC: point.temperature,
+        })),
+        pointCount: trend.points.length,
+        peakLocal,
+        maxTempC: peakPoint?.temperature ?? null,
+      }}
+      timezone={timezone}
+    />
   );
 }
 
@@ -1095,6 +970,7 @@ function LaterHighDeltaPopover({
   const detailPopoverRef = useRef<HTMLDivElement | null>(null);
   const [detailPopover, setDetailPopover] = useState<LaterHighDeltaDetailPopoverState | null>(null);
   const [detailPopoverPosition, setDetailPopoverPosition] = useState<{ top: number; left: number } | null>(null);
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const unit = breakdown.displayUnit;
   const basisLabel =
     breakdown.cutoffLocalTime
@@ -1127,9 +1003,15 @@ function LaterHighDeltaPopover({
   );
 
   useEffect(() => {
+    setShowAllHistory(false);
     setDetailPopover(null);
     setDetailPopoverPosition(null);
   }, [breakdown.generatedAt, breakdown.cutoffLocalTime]);
+
+  useEffect(() => {
+    setDetailPopover(null);
+    setDetailPopoverPosition(null);
+  }, [showAllHistory]);
 
   useEffect(() => {
     if (!detailPopover || !detailPopoverRef.current) {
@@ -1249,11 +1131,13 @@ function LaterHighDeltaPopover({
     breakdown.recent10.buckets.map((bucket) => [bucket.delta, bucket]),
   );
   const deltaSet = new Set<number>([0]);
-  for (const bucket of breakdown.allTime.buckets) {
-    deltaSet.add(bucket.delta);
-  }
   for (const bucket of breakdown.recent10.buckets) {
     deltaSet.add(bucket.delta);
+  }
+  if (showAllHistory) {
+    for (const bucket of breakdown.allTime.buckets) {
+      deltaSet.add(bucket.delta);
+    }
   }
 
   const rows = breakdown.laterObservationDayCount > 0
@@ -1320,15 +1204,24 @@ function LaterHighDeltaPopover({
         <span>WU basis days {breakdown.basisDayCount}</span>
         <span>Later WU obs {breakdown.laterObservationDayCount}</span>
       </div>
-      <div className="later-high-delta-legend" aria-hidden="true">
-        <span className="later-high-delta-legend-item is-all">
-          <span className="later-high-delta-legend-swatch" />
-          All history
-        </span>
+      <div className="later-high-delta-legend">
         <span className="later-high-delta-legend-item is-recent">
           <span className="later-high-delta-legend-swatch" />
           Recent 10 valid
         </span>
+        <label className="later-high-delta-legend-item later-high-delta-history-toggle is-all">
+          <span className="later-high-delta-legend-swatch" />
+          <span>All history</span>
+          <input
+            aria-label="Show all history"
+            checked={showAllHistory}
+            className="later-high-delta-history-checkbox"
+            onChange={(event) => {
+              setShowAllHistory(event.currentTarget.checked);
+            }}
+            type="checkbox"
+          />
+        </label>
       </div>
 
       {emptyMessage ? (
@@ -1338,37 +1231,46 @@ function LaterHighDeltaPopover({
           {rows.map((row) => {
             const seriesItems = [
               {
-                key: "all" as const,
-                label: "All history",
-                className: "is-all",
-                value: row.allTime,
-              },
-              {
                 key: "recent" as const,
                 label: "Recent 10 valid",
                 className: "is-recent",
                 value: row.recent10,
               },
+              ...(showAllHistory
+                ? [
+                    {
+                      key: "all" as const,
+                      label: "All history",
+                      className: "is-all",
+                      value: row.allTime,
+                    },
+                  ]
+                : []),
             ];
 
             return (
               <div className="later-high-delta-row" role="listitem" key={row.key}>
                 <span className="later-high-delta-label">{row.label}</span>
-                <div className="later-high-delta-bar-stack" aria-hidden="true">
-                  <div className="later-high-delta-bar-track is-all">
-                    <div
-                      className="later-high-delta-bar-fill is-all"
-                      style={{ width: `${row.allTime.probability * 100}%` }}
-                    />
-                  </div>
+                <div
+                  className={`later-high-delta-bar-stack ${showAllHistory ? "is-dual" : "is-single"}`}
+                  aria-hidden="true"
+                >
                   <div className="later-high-delta-bar-track is-recent">
                     <div
                       className="later-high-delta-bar-fill is-recent"
                       style={{ width: `${row.recent10.probability * 100}%` }}
                     />
                   </div>
+                  {showAllHistory ? (
+                    <div className="later-high-delta-bar-track is-all">
+                      <div
+                        className="later-high-delta-bar-fill is-all"
+                        style={{ width: `${row.allTime.probability * 100}%` }}
+                      />
+                    </div>
+                  ) : null}
                 </div>
-                <div className="later-high-delta-series-stats">
+                <div className={`later-high-delta-series-stats ${showAllHistory ? "is-dual" : "is-single"}`}>
                   {seriesItems.map((series) => {
                     const detailKey = `${row.key}:${series.key}`;
 
@@ -1395,9 +1297,9 @@ function LaterHighDeltaPopover({
                           </span>
                           <strong className={`later-high-delta-series-probability ${series.className}`}>
                             {series.value.sampleDayCount > 0
-                            ? formatProbabilityPercent(series.value.probability)
-                            : "—"}
-                        </strong>
+                              ? formatProbabilityPercent(series.value.probability)
+                              : "—"}
+                          </strong>
                         </button>
                       </div>
                     );
@@ -1915,7 +1817,6 @@ function WeatherCardTrendDetails({
       <ObservedTemperatureChart
         trend={card.aviationWeatherTrend}
         timezone={card.airport.timezone}
-        now={now}
         displayUnit={displayUnit}
       />
 

@@ -477,6 +477,21 @@ export async function getLatestResolvedPolymarketDate(citySlug: string) {
     : null;
 }
 
+export async function getEarliestUnresolvedPolymarketDate(citySlug: string) {
+  await ensureComparisonDb();
+  const result = await execute(
+    `SELECT MIN(local_date) AS earliest_local_date
+     FROM polymarket_days
+     WHERE city_slug = ? AND status = 'unresolved'`,
+    [citySlug],
+  );
+  const earliestLocalDate = result.rows[0]?.earliest_local_date;
+
+  return typeof earliestLocalDate === "string" && earliestLocalDate.trim()
+    ? earliestLocalDate
+    : null;
+}
+
 export async function getLatestStoredComparisonResumeDate(citySlug: string) {
   await ensureComparisonDb();
   const result = await execute(

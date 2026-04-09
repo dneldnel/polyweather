@@ -8,6 +8,7 @@ exports.getAviationObservationRows = getAviationObservationRows;
 exports.getPolymarketDayRows = getPolymarketDayRows;
 exports.getResolvedPolymarketDayRows = getResolvedPolymarketDayRows;
 exports.getLatestResolvedPolymarketDate = getLatestResolvedPolymarketDate;
+exports.getEarliestUnresolvedPolymarketDate = getEarliestUnresolvedPolymarketDate;
 exports.getLatestStoredComparisonResumeDate = getLatestStoredComparisonResumeDate;
 exports.getWundergroundDaySummariesForResolvedPolymarket = getWundergroundDaySummariesForResolvedPolymarket;
 exports.getAviationDaySummariesForResolvedPolymarket = getAviationDaySummariesForResolvedPolymarket;
@@ -349,6 +350,16 @@ async function getLatestResolvedPolymarketDate(citySlug) {
     const latestLocalDate = result.rows[0]?.latest_local_date;
     return typeof latestLocalDate === "string" && latestLocalDate.trim()
         ? latestLocalDate
+        : null;
+}
+async function getEarliestUnresolvedPolymarketDate(citySlug) {
+    await ensureComparisonDb();
+    const result = await execute(`SELECT MIN(local_date) AS earliest_local_date
+     FROM polymarket_days
+     WHERE city_slug = ? AND status = 'unresolved'`, [citySlug]);
+    const earliestLocalDate = result.rows[0]?.earliest_local_date;
+    return typeof earliestLocalDate === "string" && earliestLocalDate.trim()
+        ? earliestLocalDate
         : null;
 }
 async function getLatestStoredComparisonResumeDate(citySlug) {
