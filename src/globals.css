@@ -2026,6 +2026,13 @@ a {
   color: #f3f7ff;
 }
 
+.forecast-compact-fetched-time {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
 .forecast-compact-value-cell.is-stale .forecast-compact-value {
   color: rgba(255, 228, 178, 0.96);
 }

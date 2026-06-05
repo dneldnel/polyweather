@@ -10,7 +10,6 @@ import { Form, Link, useRevalidator } from "react-router-dom";
 import { AIRPORTS } from "../../lib/airports";
 import { buildComparisonHref } from "../../lib/comparison/query";
 import { TemperatureHistoryChart } from "./temperature-history-chart";
-import type { TemperatureUnit } from "../../lib/types";
 
 import type {
   ComparisonCityReport,
@@ -42,10 +41,6 @@ const CITY_PICKER_OPTIONS = AIRPORTS.map((airport) => ({
   label: airport.city,
 }));
 const COMPARISON_SYNC_POLL_INTERVAL_MS = 2_000;
-
-async function readJson<T>(response: Response): Promise<T> {
-  return (await response.json()) as T;
-}
 
 function formatComparisonSyncStatus(status: ComparisonSyncJobSnapshot["status"]) {
   if (status === "completed") {
@@ -116,14 +111,6 @@ function formatNumber(value: number | null) {
   }
 
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function formatRawTemperature(value: number | null, unit: TemperatureUnit) {
-  if (typeof value !== "number") {
-    return "—";
-  }
-
-  return `${formatNumber(value)}°${unit}`;
 }
 
 function formatComparableValue(

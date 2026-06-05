@@ -6,7 +6,6 @@ import type {
   LaterHighDeltaBucket,
   LaterHighDeltaSample,
   LaterHighDeltaSeries,
-  SourceReading,
   TemperatureUnit,
   WeatherCard,
 } from "./types";

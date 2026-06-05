@@ -240,6 +240,18 @@ function formatSnapshotTime(value: string | null) {
   }).format(new Date(value));
 }
 
+function formatFetchedClockLabel(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
 function shiftIsoDate(value: string, offsetDays: number) {
   const cursor = new Date(`${value}T00:00:00Z`);
   cursor.setUTCDate(cursor.getUTCDate() + offsetDays);
@@ -273,14 +285,6 @@ function formatLocalClockFromDate(value: Date, timezone: string) {
     minute: "2-digit",
     hour12: false,
   }).format(value);
-}
-
-function formatLocalHourLabel(hour: number | null) {
-  if (typeof hour !== "number" || Number.isNaN(hour)) {
-    return "—";
-  }
-
-  return `${String(hour).padStart(2, "0")}:00`;
 }
 
 function getLocalClockMinutes(value: string | Date, timezone: string) {
@@ -677,68 +681,6 @@ function getLocalTimeSortKey(value: Date, timezone: string) {
   return (totalMinutes - LOCAL_TIME_SORT_START_MINUTES + 24 * 60) % (24 * 60);
 }
 
-function readingClassName(reading: SourceReading, variant: "card" | "plain") {
-  if (variant === "plain") {
-    return "reading reading-plain";
-  }
-
-  if (reading.status === "fresh") {
-    return "reading reading-fresh";
-  }
-  if (reading.status === "stale") {
-    return "reading reading-stale";
-  }
-  return "reading reading-error";
-}
-
-function ReadingRow({
-  label,
-  reading,
-  displayUnit,
-  timezone,
-  variant = "card",
-  noWrapLabel = false,
-  noWrapValue = false,
-}: {
-  label: string;
-  reading: SourceReading;
-  displayUnit: TemperatureUnit;
-  timezone: string;
-  variant?: "card" | "plain";
-  noWrapLabel?: boolean;
-  noWrapValue?: boolean;
-}) {
-  const readingNote = reading.error?.trim() ?? "";
-  const timestampText = reading.observedAt
-    ? formatObservedAt(reading.observedAt, timezone)
-    : reading.forecastDate
-      ? `Forecast ${formatForecastDate(reading.forecastDate)}`
-      : "No timestamp";
-  const plainMetaText = readingNote ? `${timestampText} · ${readingNote}` : timestampText;
-  const showStatusPill =
-    variant === "card" && reading.status !== "fresh" && reading.status !== "error";
-
-  return (
-    <div className={readingClassName(reading, variant)}>
-      <div className="reading-header">
-        <span className={noWrapLabel ? "reading-label reading-label-nowrap" : "reading-label"}>
-          {label}
-        </span>
-        {showStatusPill ? (
-          <span className={`status-pill status-${reading.status}`}>{reading.status}</span>
-        ) : null}
-      </div>
-      <strong className={noWrapValue ? "reading-value reading-value-nowrap" : "reading-value"}>
-        {formatTemperature(reading, displayUnit)}
-      </strong>
-      <p className="reading-meta">
-        {variant === "plain" ? plainMetaText : timestampText}
-      </p>
-      {variant === "card" && readingNote ? <p className="reading-note">{readingNote}</p> : null}
-    </div>
-  );
-}
-
 function formatCompactReadingMetaText(reading: SourceReading, timezone: string) {
   if (reading.observedAt) {
     return formatLocalClockFromDate(new Date(reading.observedAt), timezone);
@@ -827,6 +769,10 @@ function buildCompactForecastTooltip(reading: SourceReading) {
     parts.push(`Forecast ${formatForecastDate(reading.forecastDate)}`);
   }
 
+  if (reading.fetchedAt) {
+    parts.push(`Fetched ${formatSnapshotTime(reading.fetchedAt)}`);
+  }
+
   if (reading.status !== "fresh") {
     parts.push(reading.status);
   }
@@ -875,6 +821,7 @@ function CompactTodayHighReadings({
         const { label, reading } = entry;
         const tooltip = buildCompactForecastTooltip(reading);
         const showStatusDot = reading.status !== "fresh";
+        const fetchedClockLabel = formatFetchedClockLabel(reading.fetchedAt);
 
         return (
           <div
@@ -885,6 +832,11 @@ function CompactTodayHighReadings({
             <strong className="forecast-compact-value">
               {formatTemperature(reading, displayUnit)}
             </strong>
+            {fetchedClockLabel ? (
+              <span className="forecast-compact-fetched-time">
+                {fetchedClockLabel}
+              </span>
+            ) : null}
             {showStatusDot ? (
               <>
                 <span
