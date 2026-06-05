@@ -7,6 +7,7 @@ import { splitHomepageRefreshAirports } from "./homepage-refresh-priority";
 import { createEmptyLaterHighDeltaBreakdown } from "./later-high-delta-breakdown";
 import {
   DEFAULT_SIGNAL_MODEL,
+  SIGNAL_MODELS,
   getSignalModelsForAirport,
   getTodayHighHighPrecisionSignalModelForAirport,
 } from "./signal-model-config";
@@ -94,6 +95,7 @@ type OpenMeteoModelMetadataResponse = {
 
 type TodayHighModelConfig = {
   label: string;
+  metadataModel: SignalModelConfig;
   upstreamModel: string;
   sourceId: string;
 };
@@ -104,11 +106,13 @@ const OPEN_METEO_MODELS: Record<
 > = {
   ecmwf: {
     label: "Open-Meteo ECMWF",
+    metadataModel: SIGNAL_MODELS.ecmwf,
     upstreamModel: "ecmwf_ifs",
     sourceId: "open-meteo-ecmwf",
   },
   gfs: {
     label: "Open-Meteo GFS",
+    metadataModel: SIGNAL_MODELS.gfs,
     upstreamModel: "gfs_seamless",
     sourceId: "open-meteo-gfs",
   },
@@ -117,9 +121,16 @@ const OPEN_METEO_MODELS: Record<
 function createTodayHighModelFromSignalModel(model: SignalModelConfig): TodayHighModelConfig {
   return {
     label: model.label,
+    metadataModel: model,
     upstreamModel: model.forecastModel,
     sourceId: model.forecastModel,
   };
+}
+
+function getOpenMeteoModelPublishedAt(metadata: OpenMeteoModelMetadataResponse) {
+  return typeof metadata.last_run_availability_time === "number"
+    ? new Date(metadata.last_run_availability_time * 1000).toISOString()
+    : null;
 }
 
 function createEmptyReading(sourceId: string, sourceLabel: string): SourceReading {
@@ -810,7 +821,10 @@ async function fetchOpenMeteoTodayHigh(
     `&forecast_days=2` +
     `&models=${model.upstreamModel}`;
 
-  const payload = await fetchOpenMeteoJson<OpenMeteoResponse>(url);
+  const [payload, metadata] = await Promise.all([
+    fetchOpenMeteoJson<OpenMeteoResponse>(url),
+    fetchSignalModelMetadata(model.metadataModel),
+  ]);
   const times = payload.daily?.time ?? [];
   const maxima = payload.daily?.temperature_2m_max ?? [];
   const index = times.findIndex((value) => value === airportToday);
@@ -826,6 +840,7 @@ async function fetchOpenMeteoTodayHigh(
     unit,
     observedAt: null,
     forecastDate: times[index] ?? airportToday,
+    publishedAt: getOpenMeteoModelPublishedAt(metadata),
     fetchedAt: new Date().toISOString(),
     status: "fresh",
     error: null,
@@ -901,10 +916,7 @@ async function fetchOpenMeteoSignals(
       typeof metadata.last_run_initialisation_time === "number"
         ? new Date(metadata.last_run_initialisation_time * 1000).toISOString()
         : null,
-    publishedAt:
-      typeof metadata.last_run_availability_time === "number"
-        ? new Date(metadata.last_run_availability_time * 1000).toISOString()
-        : null,
+    publishedAt: getOpenMeteoModelPublishedAt(metadata),
     weatherCode: typeof current.weather_code === "number" ? current.weather_code : null,
     isDay:
       typeof current.is_day === "number" ? current.is_day === 1 : null,

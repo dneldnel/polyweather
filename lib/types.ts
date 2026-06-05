@@ -20,6 +20,7 @@ export type SourceReading = {
   unit: TemperatureUnit | null;
   observedAt: string | null;
   forecastDate: string | null;
+  publishedAt?: string | null;
   fetchedAt: string | null;
   status: SourceStatus;
   error: string | null;

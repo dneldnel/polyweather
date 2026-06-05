@@ -240,16 +240,12 @@ function formatSnapshotTime(value: string | null) {
   }).format(new Date(value));
 }
 
-function formatFetchedClockLabel(value: string | null) {
+function formatPublishedClockLabel(value: string | null | undefined, timezone: string) {
   if (!value) {
     return null;
   }
 
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  return formatLocalClockFromDate(new Date(value), timezone);
 }
 
 function shiftIsoDate(value: string, offsetDays: number) {
@@ -762,15 +758,15 @@ function CompactCurrentReadings({
   );
 }
 
-function buildCompactForecastTooltip(reading: SourceReading) {
+function buildCompactForecastTooltip(reading: SourceReading, timezone: string) {
   const parts: string[] = [];
 
   if (reading.forecastDate) {
     parts.push(`Forecast ${formatForecastDate(reading.forecastDate)}`);
   }
 
-  if (reading.fetchedAt) {
-    parts.push(`Fetched ${formatSnapshotTime(reading.fetchedAt)}`);
+  if (reading.publishedAt) {
+    parts.push(`Published ${formatObservedAt(reading.publishedAt, timezone)}`);
   }
 
   if (reading.status !== "fresh") {
@@ -787,9 +783,11 @@ function buildCompactForecastTooltip(reading: SourceReading) {
 function CompactTodayHighReadings({
   readings,
   displayUnit,
+  timezone,
 }: {
   readings: Array<{ label: string; reading: SourceReading }>;
   displayUnit: TemperatureUnit;
+  timezone: string;
 }) {
   const paddedReadings = Array.from({ length: FORECAST_COMPACT_COLUMN_COUNT }, (_, index) => {
     return readings[index] ?? null;
@@ -819,9 +817,9 @@ function CompactTodayHighReadings({
         }
 
         const { label, reading } = entry;
-        const tooltip = buildCompactForecastTooltip(reading);
+        const tooltip = buildCompactForecastTooltip(reading, timezone);
         const showStatusDot = reading.status !== "fresh";
-        const fetchedClockLabel = formatFetchedClockLabel(reading.fetchedAt);
+        const publishedClockLabel = formatPublishedClockLabel(reading.publishedAt, timezone);
 
         return (
           <div
@@ -832,9 +830,9 @@ function CompactTodayHighReadings({
             <strong className="forecast-compact-value">
               {formatTemperature(reading, displayUnit)}
             </strong>
-            {fetchedClockLabel ? (
-              <span className="forecast-compact-fetched-time">
-                {fetchedClockLabel}
+            {publishedClockLabel ? (
+              <span className="forecast-compact-published-time">
+                {publishedClockLabel}
               </span>
             ) : null}
             {showStatusDot ? (
@@ -2058,6 +2056,7 @@ function WeatherCardView({
         <CompactTodayHighReadings
           readings={todayHighReadings}
           displayUnit={displayUnit}
+          timezone={card.airport.timezone}
         />
       </section>
 

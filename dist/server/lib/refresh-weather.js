@@ -23,11 +23,13 @@ const queuedOpenMeteoRequests = [];
 const OPEN_METEO_MODELS = {
     ecmwf: {
         label: "Open-Meteo ECMWF",
+        metadataModel: signal_model_config_1.SIGNAL_MODELS.ecmwf,
         upstreamModel: "ecmwf_ifs",
         sourceId: "open-meteo-ecmwf",
     },
     gfs: {
         label: "Open-Meteo GFS",
+        metadataModel: signal_model_config_1.SIGNAL_MODELS.gfs,
         upstreamModel: "gfs_seamless",
         sourceId: "open-meteo-gfs",
     },
@@ -35,9 +37,15 @@ const OPEN_METEO_MODELS = {
 function createTodayHighModelFromSignalModel(model) {
     return {
         label: model.label,
+        metadataModel: model,
         upstreamModel: model.forecastModel,
         sourceId: model.forecastModel,
     };
+}
+function getOpenMeteoModelPublishedAt(metadata) {
+    return typeof metadata.last_run_availability_time === "number"
+        ? new Date(metadata.last_run_availability_time * 1000).toISOString()
+        : null;
 }
 function createEmptyReading(sourceId, sourceLabel) {
     return {
@@ -544,7 +552,10 @@ async function fetchOpenMeteoTodayHigh(airport, model) {
         temperatureUnit +
         `&forecast_days=2` +
         `&models=${model.upstreamModel}`;
-    const payload = await fetchOpenMeteoJson(url);
+    const [payload, metadata] = await Promise.all([
+        fetchOpenMeteoJson(url),
+        fetchSignalModelMetadata(model.metadataModel),
+    ]);
     const times = payload.daily?.time ?? [];
     const maxima = payload.daily?.temperature_2m_max ?? [];
     const index = times.findIndex((value) => value === airportToday);
@@ -558,6 +569,7 @@ async function fetchOpenMeteoTodayHigh(airport, model) {
         unit,
         observedAt: null,
         forecastDate: times[index] ?? airportToday,
+        publishedAt: getOpenMeteoModelPublishedAt(metadata),
         fetchedAt: new Date().toISOString(),
         status: "fresh",
         error: null,
@@ -619,9 +631,7 @@ async function fetchOpenMeteoSignals(airport, model) {
         modelRunInitialisedAt: typeof metadata.last_run_initialisation_time === "number"
             ? new Date(metadata.last_run_initialisation_time * 1000).toISOString()
             : null,
-        publishedAt: typeof metadata.last_run_availability_time === "number"
-            ? new Date(metadata.last_run_availability_time * 1000).toISOString()
-            : null,
+        publishedAt: getOpenMeteoModelPublishedAt(metadata),
         weatherCode: typeof current.weather_code === "number" ? current.weather_code : null,
         isDay: typeof current.is_day === "number" ? current.is_day === 1 : null,
         sunrise,

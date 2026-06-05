@@ -2026,7 +2026,7 @@ a {
   color: #f3f7ff;
 }
 
-.forecast-compact-fetched-time {
+.forecast-compact-published-time {
   flex: 0 0 auto;
   font-size: 0.68rem;
   color: var(--ink-soft);
